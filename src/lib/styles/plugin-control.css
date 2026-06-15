@@ -657,3 +657,38 @@
 .opera-stats-row span:last-child {
   font-variant-numeric: tabular-nums;
 }
+
+/* Histogram bar chart for the displayed band over the AOI */
+.opera-hist {
+  margin-top: 6px;
+}
+
+.opera-hist-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 48px;
+  padding: 2px;
+  background: var(--pc-hover-bg);
+  border-radius: 3px;
+}
+
+.opera-hist-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--pc-accent);
+  border-radius: 1px 1px 0 0;
+}
+
+.opera-hist-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--pc-muted);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.opera-stats-apply-rescale {
+  margin-top: 6px;
+}

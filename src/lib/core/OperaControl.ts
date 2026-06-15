@@ -1337,8 +1337,24 @@ export class OperaControl implements IControl {
 
   private _buildStatsPanel(): HTMLElement {
     const panel = el("div", "opera-stats");
+    // Delegate clicks on the "apply suggested rescale" button rendered into the
+    // panel's HTML, since the histogram is drawn as a string each run.
+    panel.addEventListener("click", (ev) => {
+      const btn = (ev.target as HTMLElement | null)?.closest(
+        ".opera-stats-apply-rescale",
+      ) as HTMLElement | null;
+      const rescale = btn?.dataset.rescale;
+      if (rescale) this._applyRescale(rescale);
+    });
     this._statsPanel = panel;
     return panel;
+  }
+
+  /** Fill the Rendering rescale field from a suggested "min,max" value. */
+  private _applyRescale(value: string): void {
+    this._state.rescale = value;
+    if (this._rescaleInput) this._rescaleInput.value = value;
+    this._setStatus(`Rescale set to ${value}. Click Display to apply it.`);
   }
 
   private _clearStats(): void {
@@ -1420,6 +1436,9 @@ export class OperaControl implements IControl {
               bands: band ? [band] : product.render.bands,
               bandsRegex: product.render.bandsRegex,
               categorical,
+              // A finer histogram for continuous bands makes the distribution
+              // (and a good rescale) easy to read; ignored in categorical mode.
+              histogramBins: categorical ? undefined : 20,
             });
             return { granule, stats: await fetchStatistics(url, aoi.feature) };
           } catch {
@@ -1778,7 +1797,55 @@ function renderContinuousStats(s: BandStatistics): string {
   }
   if (s.validPercent != null)
     rows.push(["valid %", `${s.validPercent.toFixed(1)}%`]);
-  return statGrid(rows);
+  return statGrid(rows) + renderHistogram(s) + renderRescaleSuggestion(s);
+}
+
+/**
+ * A compact bar-chart of the band's value distribution over the AOI, from the
+ * `/statistics` histogram (`[counts, edges]`). Bars are scaled to the tallest
+ * bin; the axis shows the value range. Empty when no histogram is present.
+ */
+function renderHistogram(s: BandStatistics): string {
+  const hist = s.histogram;
+  if (!hist || hist[0].length === 0) return "";
+  const [counts, edges] = hist;
+  const max = Math.max(...counts, 1);
+  const bars = counts
+    .map((c, i) => {
+      const lo = edges[i];
+      const hi = edges[i + 1];
+      const height = Math.max(Math.round((c / max) * 100), c > 0 ? 2 : 0);
+      const title = `${formatStat(lo)}–${formatStat(hi)}: ${c.toLocaleString()}`;
+      return `<span class="opera-hist-bar" style="height:${height}%" title="${escapeHtml(
+        title,
+      )}"></span>`;
+    })
+    .join("");
+  return (
+    `<div class="opera-hist">` +
+    `<div class="opera-hist-bars">${bars}</div>` +
+    `<div class="opera-hist-axis"><span>${escapeHtml(
+      formatStat(edges[0]),
+    )}</span><span>${escapeHtml(
+      formatStat(edges[edges.length - 1]),
+    )}</span></div>` +
+    `</div>`
+  );
+}
+
+/**
+ * A one-click "apply a 2–98% rescale" button, when the stats carry sensible
+ * percentile bounds. The bounds are stashed on `data-rescale` and applied by
+ * the panel's delegated click handler.
+ */
+function renderRescaleSuggestion(s: BandStatistics): string {
+  const lo = s.percentile2;
+  const hi = s.percentile98;
+  if (lo == null || hi == null || !(hi > lo)) return "";
+  const value = `${formatNumber(lo)},${formatNumber(hi)}`;
+  return `<button type="button" class="plugin-control-button opera-secondary-button opera-block-button opera-stats-apply-rescale" data-rescale="${escapeHtml(
+    value,
+  )}">Apply 2–98% rescale (${escapeHtml(value)})</button>`;
 }
 
 /**
