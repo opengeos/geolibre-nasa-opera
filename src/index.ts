@@ -21,8 +21,10 @@ export {
   fetchTileJson,
   granuleDatetime,
   tileJsonBounds,
+  tileSizeFromTemplate,
   DEFAULT_TITILER_CMR_ENDPOINT,
 } from "./lib/opera/titiler";
+export { DSWX_WTR_COLORMAP, colormapForBand } from "./lib/opera/colormaps";
 export type {
   BBox,
   OperaProduct,

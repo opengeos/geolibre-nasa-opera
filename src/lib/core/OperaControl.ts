@@ -5,6 +5,7 @@ import {
   resolveConceptId,
   searchGranules,
 } from "../opera/cmr";
+import { colormapForBand } from "../opera/colormaps";
 import { getProduct, OPERA_PRODUCTS } from "../opera/products";
 import {
   buildTileJsonUrl,
@@ -281,6 +282,9 @@ export class OperaControl implements IControl {
         bandsRegex: product.render.bandsRegex,
         rescale: product.render.rescale,
         colormapName: product.render.colormapName,
+        // Categorical layers (e.g. DSWx WTR) need an explicit colormap because
+        // titiler-cmr does not apply the COG's embedded color table.
+        colormap: colormapForBand(product.shortName, band),
       });
       const tilejson = await fetchTileJson(url);
       const tileUrl = tilejson.tiles[0];

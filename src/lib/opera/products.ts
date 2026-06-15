@@ -21,7 +21,7 @@ export const OPERA_PRODUCTS: OperaProduct[] = [
       backend: "rasterio",
       bands: ["B01_WTR"],
       bandsRegex: "B[0-9]{2}_[A-Z]+",
-      rescale: "0,4",
+      // WTR bands render via an explicit categorical colormap (see colormaps.ts).
     },
   },
   {
@@ -33,7 +33,7 @@ export const OPERA_PRODUCTS: OperaProduct[] = [
       backend: "rasterio",
       bands: ["B01_WTR"],
       bandsRegex: "B[0-9]{2}_[A-Z]+",
-      rescale: "0,4",
+      // WTR bands render via an explicit categorical colormap (see colormaps.ts).
     },
   },
   {

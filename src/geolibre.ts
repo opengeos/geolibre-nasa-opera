@@ -11,7 +11,7 @@ import "./lib/styles/plugin-control.css";
 type AppAPI = GeoLibreAppAPI<OperaControl>;
 
 let control: OperaControl | null = null;
-let position: GeoLibreMapControlPosition = "top-right";
+let position: GeoLibreMapControlPosition = "top-left";
 let pendingState: Partial<OperaState> | null = null;
 
 function createControl(app: AppAPI): OperaControl {

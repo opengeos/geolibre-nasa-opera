@@ -34,6 +34,12 @@ export interface TileJsonParams {
   rescale?: string;
   /** Named titiler colormap, e.g. "viridis". */
   colormapName?: string;
+  /**
+   * Explicit colormap as a JSON string mapping class value -> [R,G,B,A]. When
+   * set, it takes precedence over `rescale`/`colormapName` (used for
+   * categorical layers like DSWx water classification).
+   */
+  colormap?: string;
 }
 
 export interface TileJson {
@@ -66,8 +72,14 @@ export function buildTileJsonUrl(params: TileJsonParams): string {
   if (params.datetime) query.set("temporal", params.datetime);
   for (const band of params.bands ?? []) query.append("assets", band);
   if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
-  if (params.rescale) query.set("rescale", params.rescale);
-  if (params.colormapName) query.set("colormap_name", params.colormapName);
+  // An explicit categorical colormap wins over a min/max stretch; sending both
+  // would rescale the class values before indexing the colormap.
+  if (params.colormap) {
+    query.set("colormap", params.colormap);
+  } else {
+    if (params.rescale) query.set("rescale", params.rescale);
+    if (params.colormapName) query.set("colormap_name", params.colormapName);
+  }
 
   return `${base}/${params.backend}/${TILE_MATRIX_SET}/tilejson.json?${query.toString()}`;
 }

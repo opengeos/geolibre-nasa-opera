@@ -10,55 +10,34 @@
  */
 
 /*
- * Theme tokens. Defined on both the container and the panel because the panel
- * is appended to the map container (a separate DOM subtree from the control),
- * so it cannot inherit variables scoped only to `.plugin-control`.
+ * Theme tokens. Mapped onto GeoLibre's own design tokens (hsl custom properties
+ * that switch with the `.dark` class GeoLibre toggles on <html>), so the panel
+ * tracks the in-app light/dark toggle in both directions rather than the OS
+ * preference. The literal fallbacks (light theme) apply when the plugin runs
+ * standalone outside GeoLibre, where those tokens are not defined. Defined on
+ * both the container and the panel because the panel is appended to the map
+ * container, a separate DOM subtree from the control.
  */
 .plugin-control,
 .plugin-control-panel {
-  --pc-bg: #fff;
+  --pc-bg: hsl(var(--popover, 0 0% 100%));
   --pc-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
-  --pc-icon: #1f2a37;
-  --pc-hover-bg: rgba(0, 0, 0, 0.05);
-  --pc-text: #333;
-  --pc-muted: #888;
-  --pc-label: #555;
-  --pc-border: #e0e0e0;
-  --pc-close: #999;
-  --pc-close-hover: #333;
-  --pc-scrollbar-thumb: #ccc;
-  --pc-scrollbar-thumb-hover: #aaa;
-  --pc-input-bg: #fff;
-  --pc-input-text: inherit;
-  --pc-input-border: #ddd;
-  --pc-accent: #4a90d9;
-  --pc-accent-hover: #3a7bc8;
-  --pc-accent-ring: rgba(74, 144, 217, 0.15);
-}
-
-/* Dark theme: follows the user's system preference */
-@media (prefers-color-scheme: dark) {
-  .plugin-control,
-  .plugin-control-panel {
-    --pc-bg: #1f2937;
-    --pc-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4);
-    --pc-icon: #e5e7eb;
-    --pc-hover-bg: rgba(255, 255, 255, 0.08);
-    --pc-text: #e5e7eb;
-    --pc-muted: #9ca3af;
-    --pc-label: #cbd5e1;
-    --pc-border: #374151;
-    --pc-close: #9ca3af;
-    --pc-close-hover: #e5e7eb;
-    --pc-scrollbar-thumb: #4b5563;
-    --pc-scrollbar-thumb-hover: #6b7280;
-    --pc-input-bg: #111827;
-    --pc-input-text: #e5e7eb;
-    --pc-input-border: #4b5563;
-    --pc-accent: #4a90d9;
-    --pc-accent-hover: #5a9fe5;
-    --pc-accent-ring: rgba(74, 144, 217, 0.25);
-  }
+  --pc-icon: hsl(var(--foreground, 222.2 84% 4.9%));
+  --pc-hover-bg: hsl(var(--accent, 210 40% 96.1%));
+  --pc-text: hsl(var(--popover-foreground, 222.2 84% 4.9%));
+  --pc-muted: hsl(var(--muted-foreground, 215.4 16.3% 40%));
+  --pc-label: hsl(var(--foreground, 222.2 84% 4.9%));
+  --pc-border: hsl(var(--border, 214.3 31.8% 91.4%));
+  --pc-close: hsl(var(--muted-foreground, 215.4 16.3% 40%));
+  --pc-close-hover: hsl(var(--foreground, 222.2 84% 4.9%));
+  --pc-scrollbar-thumb: hsl(var(--border, 214.3 31.8% 91.4%));
+  --pc-scrollbar-thumb-hover: hsl(var(--muted-foreground, 215.4 16.3% 40%));
+  --pc-input-bg: hsl(var(--background, 0 0% 100%));
+  --pc-input-text: hsl(var(--foreground, 222.2 84% 4.9%));
+  --pc-input-border: hsl(var(--input, 214.3 31.8% 91.4%));
+  --pc-accent: hsl(var(--primary, 221.2 83.2% 53.3%));
+  --pc-accent-hover: hsl(var(--primary, 221.2 83.2% 53.3%));
+  --pc-accent-ring: hsl(var(--ring, 221.2 83.2% 53.3%) / 0.25);
 }
 
 /*
@@ -119,32 +98,40 @@
   color: var(--pc-text);
   border-radius: 4px;
   box-shadow: var(--pc-shadow);
-  min-width: 240px;
-  max-width: 420px;
-  max-height: 500px;
-  overflow-y: auto;
   z-index: 1000;
-  padding: 8px;
   font-size: 12px;
   line-height: 1.4;
+  /*
+   * User-resizable from the bottom-right grip. The grip stays at the panel's
+   * bottom-right corner regardless of which map corner the panel is docked to,
+   * so resizing works the same in top-left and top-right positions.
+   */
+  resize: both;
+  overflow: hidden;
+  min-width: 260px;
+  min-height: 200px;
+  max-width: 90vw;
+  max-height: 85vh;
+  /* Flex column so the header stays fixed and the body scrolls. */
+  flex-direction: column;
   display: none;
 }
 
 .plugin-control-panel.expanded {
-  display: block;
+  display: flex;
 }
 
 /* Panel header */
 .plugin-control-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   font-weight: 600;
   color: var(--pc-text);
-  padding: 4px 0 8px 0;
+  padding: 8px 8px 6px 8px;
   border-bottom: 1px solid var(--pc-border);
-  margin-bottom: 8px;
 }
 
 .plugin-control-title {
@@ -172,10 +159,14 @@
   color: var(--pc-close-hover);
 }
 
-/* Content */
+/* Content - the single scroll area; fills the panel below the fixed header. */
 .plugin-control-content {
-  max-height: 400px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  /* Reserve the scrollbar's width so it never overlaps the inputs/dropdowns. */
+  scrollbar-gutter: stable;
+  padding: 8px;
 }
 
 .plugin-control-placeholder {
