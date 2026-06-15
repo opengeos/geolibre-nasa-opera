@@ -71,7 +71,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/giswqs/geolibre-nasa-opera.git"
+    "url": "https://github.com/opengeos/geolibre-nasa-opera.git"
   },
   "peerDependencies": {
     "maplibre-gl": ">=3.0.0",
