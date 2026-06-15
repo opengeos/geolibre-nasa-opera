@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { getLayerBand } from "../src/lib/opera/cmr";
 import { bandRenderDefaults } from "../src/lib/opera/products";
 import {
+  buildPointUrl,
   buildTileJsonUrl,
+  fetchPoint,
   granuleDatetime,
   tileSizeFromTemplate,
 } from "../src/lib/opera/titiler";
@@ -77,6 +79,87 @@ describe("bandRenderDefaults", () => {
       rescale: "",
       colormapName: "",
     });
+  });
+});
+
+describe("buildPointUrl", () => {
+  it("builds the rasterio /point path with lon,lat and CMR params", () => {
+    const url = buildPointUrl({
+      endpoint: "https://host/api/titiler-cmr/",
+      conceptId: "C123-POCLOUD",
+      backend: "rasterio",
+      lon: -120.5,
+      lat: 38.5,
+      granuleUr: "OPERA_L3_DSWx-HLS_T10SGH_xyz",
+      bands: ["B01_WTR"],
+      bandsRegex: "B[0-9]{2}_[A-Z]+",
+    });
+    // Trailing slash on the endpoint is normalized away.
+    expect(url).toContain(
+      "https://host/api/titiler-cmr/rasterio/point/-120.5,38.5?",
+    );
+    expect(url).toContain("collection_concept_id=C123-POCLOUD");
+    expect(url).toContain("granule_ur=OPERA_L3_DSWx-HLS_T10SGH_xyz");
+    expect(url).toContain("assets=B01_WTR");
+    expect(url).toContain("assets_regex=B%5B0-9%5D%7B2%7D_%5BA-Z%5D%2B");
+  });
+
+  it("omits optional params when absent", () => {
+    const url = buildPointUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C9-X",
+      backend: "rasterio",
+      lon: 1,
+      lat: 2,
+    });
+    expect(url).toContain("/rasterio/point/1,2?");
+    expect(url).not.toContain("granule_ur");
+    expect(url).not.toContain("assets=");
+    expect(url).not.toContain("temporal");
+  });
+});
+
+describe("fetchPoint", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("maps the titiler-cmr point response to camelCase", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          coordinates: [-120.5, 38.5],
+          assets: [
+            {
+              name: "OPERA_L3_DSWx-HLS_T10SGH",
+              values: [1, null],
+              band_names: ["b1", "b2"],
+              band_descriptions: ["Water classification (WTR)", null],
+            },
+          ],
+        }),
+      })),
+    );
+    const result = await fetchPoint("https://host/point/1,2");
+    expect(result.coordinates).toEqual([-120.5, 38.5]);
+    expect(result.assets).toHaveLength(1);
+    expect(result.assets[0]).toMatchObject({
+      name: "OPERA_L3_DSWx-HLS_T10SGH",
+      values: [1, null],
+      bandNames: ["b1", "b2"],
+    });
+  });
+
+  it("throws on a non-OK response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) })),
+    );
+    await expect(fetchPoint("https://host/point/1,2")).rejects.toThrow(
+      /point request failed \(404\)/,
+    );
   });
 });
 
