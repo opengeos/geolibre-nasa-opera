@@ -187,6 +187,132 @@ export async function fetchPoint(url: string): Promise<PointResult> {
   };
 }
 
+/** Parameters for a titiler-cmr `/statistics` zonal-stats query. */
+export interface StatisticsQueryParams {
+  /** Base titiler-cmr endpoint, no trailing slash. */
+  endpoint: string;
+  /** CMR collection concept-id. */
+  conceptId: string;
+  /** Reader backend; OPERA products use "rasterio". */
+  backend: TitilerBackend;
+  /** Pin the query to a single granule by its CMR GranuleUR (exact match). */
+  granuleUr?: string;
+  /** Temporal filter "start/end" (RFC3339) to isolate a granule or window. */
+  datetime?: string;
+  /** Band token(s) to summarize. */
+  bands?: string[];
+  /** Regex titiler-cmr uses to discover band assets within a granule. */
+  bandsRegex?: string;
+  /**
+   * Request a per-class histogram (`categorical=true`) instead of binned. For
+   * discrete products (DSWx water classes, DIST status) this yields exact
+   * pixel counts per class, the basis for class areas.
+   */
+  categorical?: boolean;
+}
+
+/** Per-band statistics returned by titiler-cmr `/statistics`. */
+export interface BandStatistics {
+  min: number;
+  max: number;
+  mean: number;
+  std: number;
+  median?: number;
+  /** Coverage-weighted pixel count within the AOI. */
+  count: number;
+  /** Unmasked pixel count within the AOI. */
+  validPixels?: number;
+  /** Percentage of AOI pixels that are valid (not nodata/masked). */
+  validPercent?: number;
+  /**
+   * `[counts, edges]`. In categorical mode `edges` are the actual class values,
+   * so `counts[i]` is the pixel count for class `edges[i]`.
+   */
+  histogram?: [number[], number[]];
+  /** Band description from the source asset, when available. */
+  description?: string;
+}
+
+/** Result of {@link fetchStatistics}: per-band statistics keyed by band name. */
+export interface StatisticsResult {
+  bands: Record<string, BandStatistics>;
+}
+
+/**
+ * Build a titiler-cmr `/statistics` request URL.
+ *
+ * Path: `{endpoint}/{backend}/statistics` (POST a GeoJSON Feature as the AOI).
+ * Reuses the same CMR query params as the tile request, plus optional
+ * `categorical`. Verified live against the staging endpoint.
+ */
+export function buildStatisticsUrl(params: StatisticsQueryParams): string {
+  const base = params.endpoint.replace(/\/+$/, "");
+  const query = new URLSearchParams();
+  query.set("collection_concept_id", params.conceptId);
+  if (params.granuleUr) query.set("granule_ur", params.granuleUr);
+  if (params.datetime) query.set("temporal", params.datetime);
+  for (const band of params.bands ?? []) query.append("assets", band);
+  if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
+  if (params.categorical) query.set("categorical", "true");
+  return `${base}/${params.backend}/statistics?${query.toString()}`;
+}
+
+/** Coerce an unknown JSON value to a finite number, or NaN. */
+function toNum(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : NaN;
+}
+
+/** Coerce to a finite number, or undefined when absent/non-finite. */
+function toOptNum(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * POST a GeoJSON AOI to titiler-cmr `/statistics` and parse the per-band stats.
+ *
+ * `feature` is a GeoJSON Feature (or FeatureCollection); titiler-cmr echoes it
+ * back with `properties.statistics` keyed by band name (e.g. `b1`).
+ */
+export async function fetchStatistics(
+  url: string,
+  feature: unknown,
+): Promise<StatisticsResult> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(feature),
+  });
+  if (!res.ok) {
+    throw new Error(`titiler-cmr statistics request failed (${res.status})`);
+  }
+  const json = (await res.json()) as {
+    properties?: { statistics?: Record<string, Record<string, unknown>> };
+  };
+  const raw = json.properties?.statistics ?? {};
+  const bands: Record<string, BandStatistics> = {};
+  for (const [name, s] of Object.entries(raw)) {
+    bands[name] = {
+      min: toNum(s.min),
+      max: toNum(s.max),
+      mean: toNum(s.mean),
+      std: toNum(s.std),
+      median: toOptNum(s.median),
+      count: toNum(s.count),
+      validPixels: toOptNum(s.valid_pixels),
+      validPercent: toOptNum(s.valid_percent),
+      histogram: Array.isArray(s.histogram)
+        ? (s.histogram as [number[], number[]])
+        : undefined,
+      description:
+        typeof s.description === "string" ? s.description : undefined,
+    };
+  }
+  return { bands };
+}
+
 /** Fetch a TileJSON document from titiler-cmr. */
 export async function fetchTileJson(url: string): Promise<TileJson> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });

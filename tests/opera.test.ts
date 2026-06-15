@@ -3,8 +3,10 @@ import { getLayerBand } from "../src/lib/opera/cmr";
 import { bandRenderDefaults } from "../src/lib/opera/products";
 import {
   buildPointUrl,
+  buildStatisticsUrl,
   buildTileJsonUrl,
   fetchPoint,
+  fetchStatistics,
   granuleDatetime,
   tileSizeFromTemplate,
 } from "../src/lib/opera/titiler";
@@ -160,6 +162,103 @@ describe("fetchPoint", () => {
     await expect(fetchPoint("https://host/point/1,2")).rejects.toThrow(
       /point request failed \(404\)/,
     );
+  });
+});
+
+describe("buildStatisticsUrl", () => {
+  it("builds the /statistics path with CMR params and categorical flag", () => {
+    const url = buildStatisticsUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C123-POCLOUD",
+      backend: "rasterio",
+      granuleUr: "OPERA_L3_DSWx-HLS_T10SGH_xyz",
+      bands: ["B01_WTR"],
+      bandsRegex: "B[0-9]{2}_[A-Z]+",
+      categorical: true,
+    });
+    expect(url).toContain("/rasterio/statistics?");
+    expect(url).toContain("collection_concept_id=C123-POCLOUD");
+    expect(url).toContain("granule_ur=OPERA_L3_DSWx-HLS_T10SGH_xyz");
+    expect(url).toContain("assets=B01_WTR");
+    expect(url).toContain("categorical=true");
+  });
+
+  it("omits the categorical flag when not requested", () => {
+    const url = buildStatisticsUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C9-X",
+      backend: "rasterio",
+    });
+    expect(url).toContain("/rasterio/statistics?");
+    expect(url).not.toContain("categorical");
+  });
+});
+
+describe("fetchStatistics", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the AOI and parses per-band statistics", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        type: "Feature",
+        properties: {
+          statistics: {
+            b1: {
+              min: 0,
+              max: 253,
+              mean: 96.86,
+              std: 122.95,
+              median: 0,
+              count: 252729.7,
+              valid_pixels: 253512,
+              valid_percent: 83.39,
+              histogram: [
+                [149265, 6396, 817, 12, 97022],
+                [0, 1, 2, 252, 253],
+              ],
+              description: "B01_WTR_Water classification (WTR)",
+            },
+          },
+        },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const feature = { type: "Feature", geometry: {}, properties: {} };
+    const result = await fetchStatistics("https://host/statistics", feature);
+
+    // The AOI feature is sent as the POST body.
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual(feature);
+
+    const b1 = result.bands.b1;
+    expect(b1).toMatchObject({
+      min: 0,
+      max: 253,
+      mean: 96.86,
+      std: 122.95,
+      count: 252729.7,
+      validPixels: 253512,
+      validPercent: 83.39,
+    });
+    expect(b1.histogram).toEqual([
+      [149265, 6396, 817, 12, 97022],
+      [0, 1, 2, 252, 253],
+    ]);
+  });
+
+  it("throws on a non-OK response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 422, json: async () => ({}) })),
+    );
+    await expect(
+      fetchStatistics("https://host/statistics", {}),
+    ).rejects.toThrow(/statistics request failed \(422\)/);
   });
 });
 

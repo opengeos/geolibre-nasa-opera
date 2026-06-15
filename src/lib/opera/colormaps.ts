@@ -26,6 +26,22 @@ export const DSWX_WTR_COLORMAP: Record<string, [number, number, number, number]>
     "255": [0, 0, 0, 0], // fill / no data -> transparent
   };
 
+/** Human-readable labels for DSWx WTR class values, used in stats breakdowns. */
+export const DSWX_WTR_CLASS_LABELS: Record<string, string> = {
+  "0": "Not water",
+  "1": "Open water",
+  "2": "Partial surface water",
+  "252": "Snow/ice",
+  "253": "Cloud/cloud shadow",
+  "254": "Ocean masked",
+  "255": "Fill",
+};
+
+/** DSWx WTR class value (1) counted as open water for area calculations. */
+export const DSWX_OPEN_WATER_CLASS = 1;
+/** DSWx WTR class value (2) counted as partial surface water. */
+export const DSWX_PARTIAL_WATER_CLASS = 2;
+
 /**
  * Return an explicit titiler `colormap` (JSON string) for a categorical band,
  * or `undefined` to let the caller fall back to rescale/grayscale rendering.
@@ -40,4 +56,20 @@ export function colormapForBand(
     return JSON.stringify(DSWX_WTR_COLORMAP);
   }
   return undefined;
+}
+
+/**
+ * Whether a band holds discrete class values, so zonal statistics should
+ * request a per-class (categorical) histogram rather than continuous bins.
+ */
+export function isCategoricalBand(shortName: string, band?: string): boolean {
+  if (!band) return false;
+  if (/DSWX/i.test(shortName) && /WTR/i.test(band)) return true;
+  if (/DIST/i.test(shortName) && /STATUS/i.test(band)) return true;
+  return false;
+}
+
+/** Whether a band is a DSWx water-classification layer (open-water areas). */
+export function isDswxWaterBand(shortName: string, band?: string): boolean {
+  return !!band && /DSWX/i.test(shortName) && /WTR/i.test(band);
 }

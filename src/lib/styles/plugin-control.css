@@ -567,3 +567,93 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* Zonal statistics results panel */
+.opera-stats {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.opera-stats:empty {
+  display: none;
+}
+
+.opera-stats-loading {
+  color: var(--pc-muted);
+  padding: 4px 0;
+}
+
+.opera-stats-title {
+  font-weight: 600;
+  color: var(--pc-label);
+}
+
+.opera-stats-aoi {
+  font-size: 10px;
+  color: var(--pc-muted);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 4px;
+}
+
+.opera-stats-block {
+  border: 1px solid var(--pc-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+
+.opera-stats-granule {
+  color: var(--pc-muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.opera-stats-empty {
+  color: var(--pc-muted);
+}
+
+.opera-stats-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px 10px;
+}
+
+.opera-stats-k {
+  color: var(--pc-muted);
+}
+
+.opera-stats-v {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.opera-stats-headline {
+  font-size: 12px;
+}
+
+.opera-stats-headline b {
+  color: var(--pc-accent);
+}
+
+.opera-stats-sub {
+  color: var(--pc-muted);
+  margin-bottom: 4px;
+}
+
+.opera-stats-classes {
+  border-top: 1px solid var(--pc-border);
+  padding-top: 4px;
+}
+
+.opera-stats-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.opera-stats-row span:last-child {
+  font-variant-numeric: tabular-nums;
+}

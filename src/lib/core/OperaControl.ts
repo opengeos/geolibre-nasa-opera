@@ -13,16 +13,32 @@ import {
   resolveConceptId,
   searchGranules,
 } from "../opera/cmr";
-import { colormapForBand } from "../opera/colormaps";
-import { bandRenderDefaults, getProduct, OPERA_PRODUCTS } from "../opera/products";
+import {
+  colormapForBand,
+  DSWX_OPEN_WATER_CLASS,
+  DSWX_PARTIAL_WATER_CLASS,
+  DSWX_WTR_CLASS_LABELS,
+  isCategoricalBand,
+  isDswxWaterBand,
+} from "../opera/colormaps";
+import {
+  bandRenderDefaults,
+  getProduct,
+  OPERA_PIXEL_SIZE_METERS,
+  OPERA_PRODUCTS,
+} from "../opera/products";
 import {
   buildPointUrl,
+  buildStatisticsUrl,
   buildTileJsonUrl,
   DEFAULT_TITILER_CMR_ENDPOINT,
   fetchPoint,
+  fetchStatistics,
   fetchTileJson,
   tileSizeFromTemplate,
+  type BandStatistics,
   type PointResult,
+  type StatisticsResult,
 } from "../opera/titiler";
 import type {
   BBox,
@@ -171,6 +187,10 @@ export class OperaControl implements IControl {
   private _inspectLngLat?: { lng: number; lat: number };
   private _inspectMoveHandler: (() => void) | null = null;
 
+  // Zonal statistics (titiler-cmr /statistics) UI.
+  private _statsBtn?: HTMLButtonElement;
+  private _statsPanel?: HTMLElement;
+
   constructor(options: OperaControlOptions = {}) {
     this._options = options;
     const { start, end } = defaultDateRange();
@@ -237,6 +257,9 @@ export class OperaControl implements IControl {
     this._displayBtn = undefined;
     this._downloadBandBtn = undefined;
     this._downloadAllBtn = undefined;
+    this._inspectBtn = undefined;
+    this._statsBtn = undefined;
+    this._statsPanel = undefined;
   }
 
   // --- State -------------------------------------------------------------
@@ -477,6 +500,7 @@ export class OperaControl implements IControl {
       this._downloadBandBtn.disabled = !hasSelection || !hasBand;
     if (this._downloadAllBtn) this._downloadAllBtn.disabled = !hasSelection;
     if (this._inspectBtn) this._inspectBtn.disabled = !hasSelection || !hasBand;
+    if (this._statsBtn) this._statsBtn.disabled = !hasSelection || !hasBand;
     // A selection change can invalidate the band being inspected; leave inspect
     // mode if there is nothing left to query.
     if (this._inspecting && (!hasSelection || !hasBand)) this._stopInspect();
@@ -775,6 +799,8 @@ export class OperaControl implements IControl {
     content.appendChild(this._buildRenderGroup());
     content.appendChild(this._buildDisplayButton());
     content.appendChild(this._buildInspectButton());
+    content.appendChild(this._buildStatisticsButton());
+    content.appendChild(this._buildStatsPanel());
     content.appendChild(this._buildDownloadGroup());
 
     // Spacing between the Display action and the endpoint settings below.
@@ -945,7 +971,9 @@ export class OperaControl implements IControl {
     if (this._downloadBandBtn) this._downloadBandBtn.disabled = true;
     if (this._downloadAllBtn) this._downloadAllBtn.disabled = true;
     if (this._inspectBtn) this._inspectBtn.disabled = true;
+    if (this._statsBtn) this._statsBtn.disabled = true;
     this._stopInspect();
+    this._clearStats();
     this._clearHighlight();
     this._renderRows();
   }
@@ -1291,6 +1319,162 @@ export class OperaControl implements IControl {
     this._inspectLngLat = undefined;
   }
 
+  // --- Zonal statistics (titiler-cmr /statistics) ------------------------
+
+  private _buildStatisticsButton(): HTMLElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className =
+      "plugin-control-button opera-secondary-button opera-block-button";
+    btn.textContent = "Statistics (current AOI)";
+    btn.title =
+      "Compute zonal statistics for the selected band over the current bounding box";
+    btn.disabled = true;
+    btn.addEventListener("click", () => void this._onStatistics());
+    this._statsBtn = btn;
+    return btn;
+  }
+
+  private _buildStatsPanel(): HTMLElement {
+    const panel = el("div", "opera-stats");
+    this._statsPanel = panel;
+    return panel;
+  }
+
+  private _clearStats(): void {
+    if (this._statsPanel) this._statsPanel.innerHTML = "";
+  }
+
+  private _setStatsContent(html: string): void {
+    if (this._statsPanel) this._statsPanel.innerHTML = html;
+  }
+
+  /**
+   * Build a GeoJSON Polygon Feature for the current AOI (the bbox field, or the
+   * map extent when the field is blank) plus the bbox itself and whether it came
+   * from the map extent, so the panel can show what area was actually summarized.
+   */
+  private _aoiFeature():
+    | { feature: unknown; bbox: BBox; fromMapExtent: boolean }
+    | undefined {
+    const typed = this._parseBBox(this._state.bbox);
+    const bbox = typed ?? this._options.getMapBounds?.() ?? undefined;
+    if (!bbox) return undefined;
+    const [w, s, e, n] = bbox;
+    const feature = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [w, s],
+            [e, s],
+            [e, n],
+            [w, n],
+            [w, s],
+          ],
+        ],
+      },
+    };
+    return { feature, bbox, fromMapExtent: !typed };
+  }
+
+  /**
+   * Compute zonal statistics for the selected band over the current AOI, one
+   * `/statistics` POST per selected granule (pinned by `granule_ur` so the
+   * numbers reflect exactly the chosen granules). DSWx water bands are queried
+   * categorically to derive open-water area.
+   */
+  private async _onStatistics(): Promise<void> {
+    const product = getProduct(this._state.product);
+    const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
+    if (!product || selected.length === 0) {
+      this._setStatus("Select a granule first.");
+      return;
+    }
+    const aoi = this._aoiFeature();
+    if (!aoi) {
+      this._setStatus(
+        "Set a bounding box (type it, Use map extent, or Draw) for the AOI.",
+      );
+      return;
+    }
+    const band = this._bandSelect?.value || product.render.bands?.[0];
+    const categorical = isCategoricalBand(product.shortName, band);
+    this._setStatsContent(
+      `<div class="opera-stats-loading">Computing statistics for ${selected.length} granule(s)…</div>`,
+    );
+    this._setStatus(`Computing statistics for ${selected.length} granule(s)…`);
+    try {
+      const conceptId =
+        selected[0].conceptId ?? (await resolveConceptId(product.shortName));
+      const results = await Promise.all(
+        selected.map(async (granule) => {
+          try {
+            const url = buildStatisticsUrl({
+              endpoint: this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT,
+              conceptId,
+              backend: product.render.backend,
+              granuleUr: granule.id,
+              bands: band ? [band] : product.render.bands,
+              bandsRegex: product.render.bandsRegex,
+              categorical,
+            });
+            return { granule, stats: await fetchStatistics(url, aoi.feature) };
+          } catch {
+            return { granule, stats: null };
+          }
+        }),
+      );
+      this._renderStats(results, product.shortName, band, aoi);
+      const ok = results.filter((r) => r.stats).length;
+      this._setStatus(
+        ok === selected.length
+          ? `Statistics for ${ok} granule(s).`
+          : `Statistics for ${ok}/${selected.length} granule(s).`,
+      );
+    } catch (err) {
+      this._clearStats();
+      this._setStatus(
+        `Statistics failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private _renderStats(
+    results: Array<{ granule: OperaGranule; stats: StatisticsResult | null }>,
+    shortName: string,
+    band: string | undefined,
+    aoi: { bbox: BBox; fromMapExtent: boolean },
+  ): void {
+    const blocks = results.map(({ granule, stats }) => {
+      const head = `<div class="opera-stats-granule" title="${escapeHtml(
+        granule.id,
+      )}">${escapeHtml(shorten(granule.id, 26))}</div>`;
+      const bandStats = stats ? firstBandStats(stats) : undefined;
+      if (!bandStats) {
+        return `<div class="opera-stats-block">${head}<div class="opera-stats-empty">no data in AOI</div></div>`;
+      }
+      const body = isDswxWaterBand(shortName, band)
+        ? renderWaterStats(bandStats)
+        : renderContinuousStats(bandStats);
+      return `<div class="opera-stats-block">${head}${body}</div>`;
+    });
+    const [w, s, e, n] = aoi.bbox;
+    const extentNote = aoi.fromMapExtent ? " · map extent" : "";
+    const header =
+      `<div class="opera-stats-title">${escapeHtml(
+        band ?? "band",
+      )} — AOI statistics</div>` +
+      `<div class="opera-stats-aoi">AOI ${w.toFixed(2)}, ${s.toFixed(
+        2,
+      )}, ${e.toFixed(2)}, ${n.toFixed(2)}${extentNote}</div>`;
+    this._setStatsContent(header + blocks.join(""));
+  }
+
   private _buildDownloadGroup(): HTMLElement {
     const row = el("div", "opera-download-row");
 
@@ -1540,6 +1724,108 @@ function shorten(value: string, max = 28): string {
 function formatNumber(v: number): string {
   if (Number.isInteger(v)) return String(v);
   return parseFloat(v.toPrecision(5)).toString();
+}
+
+/** A finite number formatted for display, or "n/a". */
+function formatStat(n: number): string {
+  return Number.isFinite(n) ? formatNumber(n) : "n/a";
+}
+
+/** Format an area in km², widening precision for small areas. */
+function formatArea(km2: number): string {
+  if (km2 >= 100) return km2.toFixed(0);
+  if (km2 >= 1) return km2.toFixed(2);
+  return km2.toFixed(3);
+}
+
+/** The first (typically only) band's statistics from a result. */
+function firstBandStats(stats: StatisticsResult): BandStatistics | undefined {
+  return Object.values(stats.bands)[0];
+}
+
+/** A key/value grid of scalar statistics. */
+function statGrid(rows: Array<[string, string]>): string {
+  const cells = rows
+    .map(
+      ([k, v]) =>
+        `<span class="opera-stats-k">${escapeHtml(
+          k,
+        )}</span><span class="opera-stats-v">${escapeHtml(v)}</span>`,
+    )
+    .join("");
+  return `<div class="opera-stats-grid">${cells}</div>`;
+}
+
+/** Pixels -> area in km² at the OPERA native grid spacing. */
+function pixelsToKm2(pixels: number): number {
+  return (pixels * OPERA_PIXEL_SIZE_METERS * OPERA_PIXEL_SIZE_METERS) / 1e6;
+}
+
+/** Continuous-band statistics block (min/max/mean/std/median/coverage). */
+function renderContinuousStats(s: BandStatistics): string {
+  const rows: Array<[string, string]> = [
+    ["min", formatStat(s.min)],
+    ["max", formatStat(s.max)],
+    ["mean", formatStat(s.mean)],
+    ["std", formatStat(s.std)],
+  ];
+  if (s.median != null) rows.push(["median", formatStat(s.median)]);
+  if (s.validPixels != null) {
+    rows.push(["valid px", Math.round(s.validPixels).toLocaleString()]);
+    rows.push(["valid area", `${formatArea(pixelsToKm2(s.validPixels))} km²`]);
+  } else {
+    rows.push(["count", formatStat(s.count)]);
+  }
+  if (s.validPercent != null)
+    rows.push(["valid %", `${s.validPercent.toFixed(1)}%`]);
+  return statGrid(rows);
+}
+
+/**
+ * DSWx water-band block: derive open-water area from the categorical histogram
+ * (class pixel counts x pixel area) and list every class count. Areas are a
+ * fraction of the total valid area, which is shown so the magnitude is
+ * interpretable (e.g. a whole-granule AOI yields thousands of km²).
+ */
+function renderWaterStats(s: BandStatistics): string {
+  let openCount = 0;
+  let partialCount = 0;
+  let validCount = 0;
+  const classRows: string[] = [];
+  if (s.histogram) {
+    const [counts, values] = s.histogram;
+    values.forEach((v, i) => {
+      const count = counts[i] ?? 0;
+      validCount += count;
+      if (v === DSWX_OPEN_WATER_CLASS) openCount = count;
+      if (v === DSWX_PARTIAL_WATER_CLASS) partialCount = count;
+      const label = DSWX_WTR_CLASS_LABELS[String(v)] ?? `Class ${v}`;
+      classRows.push(
+        `<div class="opera-stats-row"><span>${escapeHtml(
+          label,
+        )}</span><span>${count.toLocaleString()}</span></div>`,
+      );
+    });
+  }
+  // Percentages are of valid (non-fill) pixels; keep each one on the line it
+  // describes so the open-water fraction is never mistaken for open+partial.
+  const pct = (px: number) =>
+    validCount > 0 ? ` (${((px / validCount) * 100).toFixed(1)}% of valid)` : "";
+  const openLine = `Open water: <b>${formatArea(
+    pixelsToKm2(openCount),
+  )} km²</b>${pct(openCount)}`;
+  const waterLine = `Open + partial: ${formatArea(
+    pixelsToKm2(openCount + partialCount),
+  )} km²${pct(openCount + partialCount)}`;
+  const validLine = `Valid: ${formatArea(
+    pixelsToKm2(validCount),
+  )} km² · ${validCount.toLocaleString()} px`;
+  return (
+    `<div class="opera-stats-headline">${openLine}</div>` +
+    `<div class="opera-stats-sub">${waterLine}</div>` +
+    `<div class="opera-stats-sub">${validLine}</div>` +
+    `<div class="opera-stats-classes">${classRows.join("")}</div>`
+  );
 }
 
 /**
