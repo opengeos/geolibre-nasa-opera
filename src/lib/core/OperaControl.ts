@@ -23,6 +23,8 @@ import {
 } from "../opera/colormaps";
 import {
   bandRenderDefaults,
+  expressionPresets,
+  type ExpressionPreset,
   getProduct,
   OPERA_PIXEL_SIZE_METERS,
   OPERA_PRODUCTS,
@@ -66,6 +68,8 @@ export interface OperaState {
   rescale: string;
   /** Optional named colormap override; blank uses the product/band default. */
   colormapName: string;
+  /** Optional band-math expression (e.g. "10*log10(b1)"); blank renders the raw band. */
+  expression: string;
   /** titiler-cmr endpoint. */
   endpoint: string;
 }
@@ -151,6 +155,10 @@ export class OperaControl implements IControl {
   private _bandSelect?: HTMLSelectElement;
   private _rescaleInput?: HTMLInputElement;
   private _colormapSelect?: HTMLSelectElement;
+  private _expressionInput?: HTMLInputElement;
+  private _expressionPresetSelect?: HTMLSelectElement;
+  private _expressionHint?: HTMLElement;
+  private _currentExpressionPresets: ExpressionPreset[] = [];
   private _displayBtn?: HTMLButtonElement;
   private _downloadBandBtn?: HTMLButtonElement;
   private _downloadAllBtn?: HTMLButtonElement;
@@ -204,6 +212,7 @@ export class OperaControl implements IControl {
       count: 50,
       rescale: "",
       colormapName: "",
+      expression: "",
       endpoint: DEFAULT_TITILER_CMR_ENDPOINT,
     };
   }
@@ -254,6 +263,9 @@ export class OperaControl implements IControl {
     this._bandSelect = undefined;
     this._rescaleInput = undefined;
     this._colormapSelect = undefined;
+    this._expressionInput = undefined;
+    this._expressionPresetSelect = undefined;
+    this._expressionHint = undefined;
     this._displayBtn = undefined;
     this._downloadBandBtn = undefined;
     this._downloadAllBtn = undefined;
@@ -370,12 +382,17 @@ export class OperaControl implements IControl {
     const band = this._bandSelect?.value || product.render.bands?.[0];
     const userRescale = this._state.rescale.trim();
     const userColormap = this._state.colormapName.trim();
+    const expression = this._state.expression.trim();
     // A user-selected named colormap overrides the categorical class colormap
-    // (e.g. choosing "terrain" for a DEM band instead of the DSWx classes).
-    const categorical = userColormap
-      ? undefined
-      : colormapForBand(product.shortName, band);
+    // (e.g. choosing "terrain" for a DEM band instead of the DSWx classes). An
+    // expression produces a computed continuous value, so the categorical class
+    // colormap never applies.
+    const categorical =
+      userColormap || expression
+        ? undefined
+        : colormapForBand(product.shortName, band);
 
+    this._setDisplayBusy(true);
     this._setStatus(
       `Requesting ${selected.length} granule(s) from titiler-cmr…`,
     );
@@ -398,6 +415,7 @@ export class OperaControl implements IControl {
             rescale: userRescale || product.render.rescale,
             colormapName: userColormap || product.render.colormapName,
             colormap: categorical,
+            expression,
           });
           try {
             const tilejson = await fetchTileJson(url);
@@ -443,7 +461,18 @@ export class OperaControl implements IControl {
       this._setStatus(
         `Display failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      this._setDisplayBusy(false);
     }
+  }
+
+  /** Toggle the Display button's loading state. */
+  private _setDisplayBusy(busy: boolean): void {
+    const btn = this._displayBtn;
+    if (!btn) return;
+    btn.classList.toggle("opera-busy", busy);
+    btn.disabled = busy;
+    btn.textContent = busy ? "Displaying…" : "Display";
   }
 
   /**
@@ -1064,6 +1093,7 @@ export class OperaControl implements IControl {
     this._state.colormapName = defaults.colormapName;
     if (this._rescaleInput) this._rescaleInput.value = defaults.rescale;
     if (this._colormapSelect) this._colormapSelect.value = defaults.colormapName;
+    this._refreshExpressionPresets();
   }
 
   private _populateBands(): void {
@@ -1107,6 +1137,7 @@ export class OperaControl implements IControl {
     rescale.dataset.field = "rescale";
     rescale.addEventListener("input", () => {
       this._state.rescale = rescale.value;
+      this._updateExpressionHint();
     });
     this._rescaleInput = rescale;
     rescaleGroup.appendChild(rescale);
@@ -1129,8 +1160,109 @@ export class OperaControl implements IControl {
     this._colormapSelect = cmap;
     cmapGroup.appendChild(cmap);
 
-    wrap.append(rescaleGroup, cmapGroup);
+    wrap.append(rescaleGroup, cmapGroup, this._buildExpressionGroup());
     return wrap;
+  }
+
+  /**
+   * Optional band-math expression (rio-tiler `expression`). When set it
+   * overrides plain band rendering everywhere (Display / Inspect / Statistics);
+   * the selected band is `b1`. A per-band presets dropdown fills the field.
+   */
+  private _buildExpressionGroup(): HTMLElement {
+    const group = el("div", "plugin-control-group");
+    const row = el("div", "opera-label-row");
+    row.appendChild(label("Expression (band math)"));
+
+    const presets = document.createElement("select");
+    presets.className = "opera-expr-presets";
+    presets.title = "Insert a ready-made expression";
+    this._expressionPresetSelect = presets;
+    presets.addEventListener("change", () => {
+      const preset = this._currentExpressionPresets.find(
+        (p) => p.expression === presets.value,
+      );
+      if (preset) this._applyExpressionPreset(preset);
+      presets.selectedIndex = 0; // reset to the "Presets…" placeholder
+    });
+    row.appendChild(presets);
+    group.appendChild(row);
+
+    const input = document.createElement("input");
+    input.className = "plugin-control-input";
+    input.type = "text";
+    input.placeholder = "blank = raw band — e.g. 10*log10(b1)";
+    input.value = this._state.expression;
+    input.dataset.field = "expression";
+    input.addEventListener("input", () => {
+      this._state.expression = input.value;
+      this._updateExpressionHint();
+    });
+    this._expressionInput = input;
+    group.appendChild(input);
+
+    const hint = el("div", "opera-expr-hint");
+    hint.textContent =
+      "Set a Rescale (min,max) above so the computed result displays.";
+    this._expressionHint = hint;
+    group.appendChild(hint);
+
+    this._refreshExpressionPresets();
+    this._updateExpressionHint();
+    return group;
+  }
+
+  /** Apply a preset's expression plus its rescale/colormap, if any. */
+  private _applyExpressionPreset(preset: ExpressionPreset): void {
+    this._setExpression(preset.expression);
+    if (preset.rescale != null) {
+      this._state.rescale = preset.rescale;
+      if (this._rescaleInput) this._rescaleInput.value = preset.rescale;
+    }
+    if (preset.colormapName != null) {
+      this._state.colormapName = preset.colormapName;
+      if (this._colormapSelect) this._colormapSelect.value = preset.colormapName;
+    }
+    this._updateExpressionHint();
+  }
+
+  /**
+   * Show a hint when an expression is set but no rescale is given: a computed
+   * value rarely matches the band's default stretch, so it would render flat.
+   */
+  private _updateExpressionHint(): void {
+    if (!this._expressionHint) return;
+    const needsRescale =
+      !!this._state.expression.trim() && !this._state.rescale.trim();
+    this._expressionHint.style.display = needsRescale ? "block" : "none";
+  }
+
+  /** Set the expression field + state. */
+  private _setExpression(value: string): void {
+    this._state.expression = value;
+    if (this._expressionInput) this._expressionInput.value = value;
+    this._updateExpressionHint();
+  }
+
+  /** Rebuild the presets dropdown for the active product/band. */
+  private _refreshExpressionPresets(): void {
+    const select = this._expressionPresetSelect;
+    if (!select) return;
+    const band = this._bandSelect?.value;
+    const presets = expressionPresets(this._state.product, band);
+    this._currentExpressionPresets = presets;
+    select.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Presets…";
+    select.appendChild(placeholder);
+    for (const preset of presets) {
+      const opt = document.createElement("option");
+      opt.value = preset.expression;
+      opt.textContent = preset.label;
+      select.appendChild(opt);
+    }
+    select.disabled = presets.length === 0;
   }
 
   private _buildDisplayButton(): HTMLElement {
@@ -1218,6 +1350,7 @@ export class OperaControl implements IControl {
               granuleUr: granule.id,
               bands: band ? [band] : product.render.bands,
               bandsRegex: product.render.bandsRegex,
+              expression: this._state.expression.trim(),
             });
             return { granule, point: await fetchPoint(url) };
           } catch {
@@ -1453,7 +1586,10 @@ export class OperaControl implements IControl {
       return;
     }
     const band = this._bandSelect?.value || product.render.bands?.[0];
-    const categorical = isCategoricalBand(product.shortName, band);
+    const expression = this._state.expression.trim();
+    // An expression yields a computed continuous value, so class-count
+    // (categorical) statistics no longer apply.
+    const categorical = !expression && isCategoricalBand(product.shortName, band);
     this._setStatsContent(
       `<div class="opera-stats-loading">Computing statistics for ${selected.length} granule(s)…</div>`,
     );
@@ -1472,6 +1608,7 @@ export class OperaControl implements IControl {
               bands: band ? [band] : product.render.bands,
               bandsRegex: product.render.bandsRegex,
               categorical,
+              expression,
               // A finer histogram for continuous bands makes the distribution
               // (and a good rescale) easy to read; ignored in categorical mode.
               histogramBins: categorical ? undefined : 20,
@@ -1513,9 +1650,12 @@ export class OperaControl implements IControl {
       if (!bandStats) {
         return `<div class="opera-stats-block">${head}<div class="opera-stats-empty">no data in AOI</div></div>`;
       }
-      const body = isDswxWaterBand(shortName, band)
-        ? renderWaterStats(bandStats)
-        : renderContinuousStats(bandStats, band, granule.id);
+      // With an expression the value is computed, not a water class, so always
+      // show the continuous block.
+      const body =
+        isDswxWaterBand(shortName, band) && !this._state.expression.trim()
+          ? renderWaterStats(bandStats)
+          : renderContinuousStats(bandStats, band, granule.id);
       return `<div class="opera-stats-block">${head}${body}</div>`;
     });
     const [w, s, e, n] = aoi.bbox;

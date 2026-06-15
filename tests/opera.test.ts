@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { getLayerBand } from "../src/lib/opera/cmr";
-import { bandRenderDefaults } from "../src/lib/opera/products";
+import { bandRenderDefaults, expressionPresets } from "../src/lib/opera/products";
 import {
   buildPointUrl,
   buildStatisticsUrl,
@@ -51,6 +51,58 @@ describe("buildTileJsonUrl", () => {
     expect(url).toContain("temporal=");
     expect(url).toContain("rescale=0%2C4");
     expect(url).toContain("colormap_name=viridis");
+  });
+});
+
+describe("expression band math", () => {
+  it("adds expression + asset_as_band to tile/point/stats requests", () => {
+    const common = {
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C1-X",
+      backend: "rasterio" as const,
+      bands: ["VV"],
+    };
+    const tile = buildTileJsonUrl({ ...common, expression: "10*log10(b1)" });
+    const point = buildPointUrl({ ...common, lon: 1, lat: 2, expression: "10*log10(b1)" });
+    const stats = buildStatisticsUrl({ ...common, expression: "10*log10(b1)" });
+    for (const url of [tile, point, stats]) {
+      // "10*log10(b1)" url-encoded.
+      expect(url).toContain("expression=10*log10%28b1%29");
+      expect(url).toContain("asset_as_band=true");
+    }
+  });
+
+  it("omits expression params when blank or whitespace", () => {
+    const url = buildTileJsonUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C1-X",
+      backend: "rasterio",
+      bands: ["VV"],
+      expression: "   ",
+    });
+    expect(url).not.toContain("expression");
+    expect(url).not.toContain("asset_as_band");
+  });
+});
+
+describe("expressionPresets", () => {
+  it("offers a dB preset for RTC-S1 backscatter bands", () => {
+    const presets = expressionPresets("OPERA_L2_RTC-S1_V1", "VV");
+    expect(presets).toHaveLength(1);
+    expect(presets[0].expression).toBe("10*log10(b1)");
+  });
+
+  it("offers water-mask presets for DSWx WTR bands", () => {
+    const presets = expressionPresets("OPERA_L3_DSWX-HLS_V1", "B01_WTR");
+    expect(presets.map((p) => p.expression)).toEqual([
+      "where(b1==1,1,0)",
+      "where((b1==1)|(b1==2),1,0)",
+    ]);
+  });
+
+  it("returns no presets for bands without a preset", () => {
+    expect(expressionPresets("OPERA_L3_DSWX-HLS_V1", "B10_DEM")).toEqual([]);
+    expect(expressionPresets("OPERA_L2_RTC-S1_V1", "B10_DEM")).toEqual([]);
   });
 });
 

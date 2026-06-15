@@ -41,6 +41,19 @@
 }
 
 /*
+ * Border-box for everything in the control/panel so full-width inputs, selects,
+ * and buttons include their padding/border within 100% and never overflow the
+ * panel. GeoLibre applies a global reset, but the standalone build does not, so
+ * the plugin sets its own (scoped) reset to stay self-contained.
+ */
+.plugin-control,
+.plugin-control *,
+.plugin-control-panel,
+.plugin-control-panel * {
+  box-sizing: border-box;
+}
+
+/*
  * Container - matches maplibregl-ctrl styling.
  * The `.maplibregl-ctrl-group` part raises specificity above MapLibre's own
  * `.maplibregl-ctrl-group { background: #fff }` rule, which otherwise wins on
@@ -354,6 +367,37 @@
 .opera-bbox-actions {
   display: flex;
   gap: 10px;
+}
+
+/* Compact band-math expression presets dropdown (in the field's label row). */
+.opera-expr-presets {
+  font-size: 11px;
+  max-width: 60%;
+  color: var(--pc-accent);
+  background: var(--pc-input-bg);
+  border: 1px solid var(--pc-input-border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  cursor: pointer;
+}
+
+.opera-expr-presets:disabled {
+  color: var(--pc-muted);
+  cursor: not-allowed;
+}
+
+/* Hint shown when an expression is set but no rescale is given. */
+.opera-expr-hint {
+  display: none;
+  font-size: 10px;
+  color: var(--pc-muted);
+  margin-top: 4px;
+}
+
+/* Loading state for the Display button while tiles are being requested. */
+.plugin-control-button.opera-busy {
+  opacity: 0.75;
+  cursor: progress;
 }
 
 /*
