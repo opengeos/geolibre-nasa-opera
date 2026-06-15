@@ -370,15 +370,38 @@
   z-index: 500;
 }
 
-.opera-bbox-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-
 .opera-block-button {
   width: 100%;
   margin-top: 4px;
+}
+
+/* Secondary Download actions, shown as a two-up row under Display */
+.opera-download-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.opera-download-row .plugin-control-button {
+  flex: 1;
+}
+
+.plugin-control-button.opera-secondary-button {
+  background: transparent;
+  color: var(--pc-accent);
+  border: 1px solid var(--pc-input-border);
+  font-size: 12px;
+  padding: 7px 8px;
+}
+
+.plugin-control-button.opera-secondary-button:hover {
+  background: var(--pc-hover-bg);
+}
+
+.plugin-control-button.opera-secondary-button:disabled {
+  color: var(--pc-muted);
+  background: transparent;
+  cursor: not-allowed;
 }
 
 /* Results table */

@@ -1,3 +1,5 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   GeoJSONSource,
   IControl,
@@ -6,6 +8,7 @@ import type {
 } from "maplibre-gl";
 import type { GeoLibreNativeLayerRegistration } from "../geolibre/host-api";
 import {
+  getLayerBand,
   granuleBands,
   resolveConceptId,
   searchGranules,
@@ -33,11 +36,8 @@ export interface OperaState {
   panelWidth: number;
   /** CMR short_name of the selected product. */
   product: string;
-  /** Bounding box strings (kept as strings to preserve blank fields). */
-  west: string;
-  south: string;
-  east: string;
-  north: string;
+  /** Bounding box as a "west, south, east, north" string; blank = map extent. */
+  bbox: string;
   /** Date range, ISO `YYYY-MM-DD`. */
   start: string;
   end: string;
@@ -133,6 +133,8 @@ export class OperaControl implements IControl {
   private _rescaleInput?: HTMLInputElement;
   private _colormapSelect?: HTMLSelectElement;
   private _displayBtn?: HTMLButtonElement;
+  private _downloadBandBtn?: HTMLButtonElement;
+  private _downloadAllBtn?: HTMLButtonElement;
   private _options: OperaControlOptions;
   private _state: OperaState;
 
@@ -166,10 +168,7 @@ export class OperaControl implements IControl {
       collapsed: options.collapsed ?? true,
       panelWidth: options.panelWidth ?? 340,
       product: OPERA_PRODUCTS[0]?.shortName ?? "",
-      west: "",
-      south: "",
-      east: "",
-      north: "",
+      bbox: "",
       start,
       end,
       count: 50,
@@ -224,6 +223,8 @@ export class OperaControl implements IControl {
     this._rescaleInput = undefined;
     this._colormapSelect = undefined;
     this._displayBtn = undefined;
+    this._downloadBandBtn = undefined;
+    this._downloadAllBtn = undefined;
   }
 
   // --- State -------------------------------------------------------------
@@ -457,10 +458,12 @@ export class OperaControl implements IControl {
     }
     this._bands = this._activeGranule ? granuleBands(this._activeGranule) : [];
     this._populateBands();
-    if (this._displayBtn) {
-      this._displayBtn.disabled =
-        this._selectedIds.size === 0 || this._bands.length === 0;
-    }
+    const hasSelection = this._selectedIds.size > 0;
+    const hasBand = this._bands.length > 0;
+    if (this._displayBtn) this._displayBtn.disabled = !hasSelection || !hasBand;
+    if (this._downloadBandBtn)
+      this._downloadBandBtn.disabled = !hasSelection || !hasBand;
+    if (this._downloadAllBtn) this._downloadAllBtn.disabled = !hasSelection;
     this._highlightSelectedFootprints();
   }
 
@@ -642,10 +645,11 @@ export class OperaControl implements IControl {
     const start = this._drawStartLngLat;
     if (start) {
       const end = e.lngLat;
-      this._state.west = Math.min(start.lng, end.lng).toFixed(4);
-      this._state.east = Math.max(start.lng, end.lng).toFixed(4);
-      this._state.south = Math.min(start.lat, end.lat).toFixed(4);
-      this._state.north = Math.max(start.lat, end.lat).toFixed(4);
+      const w = Math.min(start.lng, end.lng);
+      const s = Math.min(start.lat, end.lat);
+      const ee = Math.max(start.lng, end.lng);
+      const n = Math.max(start.lat, end.lat);
+      this._state.bbox = [w, s, ee, n].map((v) => v.toFixed(4)).join(", ");
       this._syncForm();
     }
     this._endDraw();
@@ -654,15 +658,17 @@ export class OperaControl implements IControl {
   // --- BBox helpers ------------------------------------------------------
 
   private _currentBBox(): BBox | undefined {
-    const w = parseFloat(this._state.west);
-    const s = parseFloat(this._state.south);
-    const e = parseFloat(this._state.east);
-    const n = parseFloat(this._state.north);
-    if ([w, s, e, n].every((v) => Number.isFinite(v))) {
-      return [w, s, e, n];
+    // Fall back to the current map extent when the field is blank or invalid.
+    return this._parseBBox(this._state.bbox) ?? this._options.getMapBounds?.() ?? undefined;
+  }
+
+  /** Parse a "west, south, east, north" string into a BBox, or undefined. */
+  private _parseBBox(value: string): BBox | undefined {
+    const parts = value.split(",").map((p) => parseFloat(p.trim()));
+    if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+      return [parts[0], parts[1], parts[2], parts[3]];
     }
-    // Fall back to the current map extent when fields are blank.
-    return this._options.getMapBounds?.() ?? undefined;
+    return undefined;
   }
 
   private _useMapExtent(): void {
@@ -671,11 +677,7 @@ export class OperaControl implements IControl {
       this._setStatus("Map extent unavailable.");
       return;
     }
-    const [w, s, e, n] = bounds.map((v) => v.toFixed(4));
-    this._state.west = w;
-    this._state.south = s;
-    this._state.east = e;
-    this._state.north = n;
+    this._state.bbox = bounds.map((v) => v.toFixed(4)).join(", ");
     this._syncForm();
   }
 
@@ -745,6 +747,7 @@ export class OperaControl implements IControl {
     content.appendChild(this._buildBandGroup());
     content.appendChild(this._buildRenderGroup());
     content.appendChild(this._buildDisplayButton());
+    content.appendChild(this._buildDownloadGroup());
 
     // Spacing between the Display action and the endpoint settings below.
     const endpointDivider = document.createElement("div");
@@ -804,22 +807,16 @@ export class OperaControl implements IControl {
     row.appendChild(actions);
     group.appendChild(row);
 
-    const grid = document.createElement("div");
-    grid.className = "opera-bbox-grid";
-    for (const field of ["west", "south", "east", "north"] as const) {
-      const input = document.createElement("input");
-      input.className = "plugin-control-input";
-      input.type = "number";
-      input.step = "any";
-      input.placeholder = field[0].toUpperCase();
-      input.value = this._state[field];
-      input.dataset.field = field;
-      input.addEventListener("input", () => {
-        this._state[field] = input.value;
-      });
-      grid.appendChild(input);
-    }
-    group.appendChild(grid);
+    const input = document.createElement("input");
+    input.className = "plugin-control-input";
+    input.type = "text";
+    input.placeholder = "west, south, east, north";
+    input.value = this._state.bbox;
+    input.dataset.field = "bbox";
+    input.addEventListener("input", () => {
+      this._state.bbox = input.value;
+    });
+    group.appendChild(input);
     return group;
   }
 
@@ -917,6 +914,8 @@ export class OperaControl implements IControl {
     this._bands = [];
     this._populateBands();
     if (this._displayBtn) this._displayBtn.disabled = true;
+    if (this._downloadBandBtn) this._downloadBandBtn.disabled = true;
+    if (this._downloadAllBtn) this._downloadAllBtn.disabled = true;
     this._clearHighlight();
     this._renderRows();
   }
@@ -1085,6 +1084,98 @@ export class OperaControl implements IControl {
     this._displayBtn = btn;
     btn.addEventListener("click", () => void this._onDisplay());
     return btn;
+  }
+
+  private _buildDownloadGroup(): HTMLElement {
+    const row = el("div", "opera-download-row");
+
+    const bandBtn = document.createElement("button");
+    bandBtn.type = "button";
+    bandBtn.className = "plugin-control-button opera-secondary-button";
+    bandBtn.textContent = "Download band";
+    bandBtn.title = "Download the selected band for each selected granule";
+    bandBtn.disabled = true;
+    bandBtn.addEventListener("click", () => this._downloadSelected(false));
+    this._downloadBandBtn = bandBtn;
+
+    const allBtn = document.createElement("button");
+    allBtn.type = "button";
+    allBtn.className = "plugin-control-button opera-secondary-button";
+    allBtn.textContent = "Download all bands";
+    allBtn.title = "Download every band file for each selected granule";
+    allBtn.disabled = true;
+    allBtn.addEventListener("click", () => this._downloadSelected(true));
+    this._downloadAllBtn = allBtn;
+
+    row.append(bandBtn, allBtn);
+    return row;
+  }
+
+  /**
+   * Download the selected granules' files through the browser. OPERA data is
+   * Earthdata-protected, so each URL is opened as a navigation (new tab): the
+   * browser follows the login redirect and downloads when the user has an
+   * Earthdata session. No credentials are handled by the plugin.
+   */
+  private _downloadSelected(allBands: boolean): void {
+    const product = getProduct(this._state.product);
+    const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
+    if (selected.length === 0) {
+      this._setStatus("Select a granule first.");
+      return;
+    }
+    const band = this._bandSelect?.value || product?.render.bands?.[0];
+    const urls: string[] = [];
+    for (const granule of selected) {
+      // Only HTTPS links are browser-downloadable (s3:// links are not).
+      const https = granule.dataLinks.filter((u) => u.startsWith("https://"));
+      if (allBands) {
+        urls.push(...https);
+      } else {
+        const match = https.find((u) => getLayerBand(u) === band);
+        if (match) urls.push(match);
+      }
+    }
+    if (urls.length === 0) {
+      this._setStatus("No downloadable files found for the selection.");
+      return;
+    }
+    this._triggerDownloads(urls);
+    this._setStatus(
+      `Downloading ${urls.length} file(s). Sign in to NASA Earthdata if prompted.`,
+    );
+  }
+
+  /** Trigger downloads for each URL, staggered to avoid being collapsed. */
+  private _triggerDownloads(urls: string[]): void {
+    urls.forEach((url, i) => {
+      setTimeout(() => void this._openForDownload(url), i * 300);
+    });
+  }
+
+  /**
+   * Open one download URL. Under Tauri the webview ignores anchor/window.open,
+   * so route through the system browser via the opener plugin (where the user's
+   * Earthdata session lives). On the web/standalone, fall back to an anchor
+   * click that opens in a new tab so a login page never replaces the app.
+   */
+  private async _openForDownload(url: string): Promise<void> {
+    if (isTauri()) {
+      try {
+        await openUrl(url);
+        return;
+      } catch {
+        // Fall through to the anchor approach below.
+      }
+    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   private _buildEndpointGroup(): HTMLElement {
