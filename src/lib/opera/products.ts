@@ -110,3 +110,41 @@ export const OPERA_PRODUCTS: OperaProduct[] = [
 export function getProduct(shortName: string): OperaProduct | undefined {
   return OPERA_PRODUCTS.find((p) => p.shortName === shortName);
 }
+
+/** Suggested rescale + colormap for a given band, shown in the Rendering UI. */
+export interface BandRender {
+  /** Rescale "min,max"; blank means none. */
+  rescale: string;
+  /** Named colormap; blank means the band/product default (e.g. categorical). */
+  colormapName: string;
+}
+
+/**
+ * Default render hints for a band, used to auto-populate the Rendering fields so
+ * the user sees what will be applied and can tweak it. Categorical DSWx water
+ * bands return blanks (their built-in class colormap applies); continuous bands
+ * (DEM, confidence, SAR backscatter) get a sensible stretch + colormap so they
+ * are not rendered flat.
+ */
+export function bandRenderDefaults(shortName: string, band?: string): BandRender {
+  const empty: BandRender = { rescale: "", colormapName: "" };
+  if (!band) return empty;
+  const b = band.toUpperCase();
+
+  // DSWx categorical water layers: keep blank so the built-in class colormap
+  // (see colormaps.ts) is applied instead of a named colormap.
+  if (/DSWX/i.test(shortName) && /WTR/.test(b)) return empty;
+  // Elevation (meters).
+  if (/DEM/.test(b)) return { rescale: "0,3000", colormapName: "terrain" };
+  // SAR backscatter polarizations (RTC, linear power).
+  if (/^(VV|VH|HH|HV)$/.test(b)) return { rescale: "0,0.4", colormapName: "gray" };
+  // DSWx confidence layer (0-100).
+  if (/CONF/.test(b)) return { rescale: "0,100", colormapName: "viridis" };
+
+  // Fall back to the product-level defaults.
+  const product = getProduct(shortName);
+  return {
+    rescale: product?.render.rescale ?? "",
+    colormapName: product?.render.colormapName ?? "",
+  };
+}

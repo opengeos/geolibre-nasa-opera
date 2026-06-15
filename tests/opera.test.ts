@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getLayerBand } from "../src/lib/opera/cmr";
+import { bandRenderDefaults } from "../src/lib/opera/products";
 import {
   buildTileJsonUrl,
   granuleDatetime,
@@ -46,6 +47,36 @@ describe("buildTileJsonUrl", () => {
     expect(url).toContain("temporal=");
     expect(url).toContain("rescale=0%2C4");
     expect(url).toContain("colormap_name=viridis");
+  });
+});
+
+describe("bandRenderDefaults", () => {
+  it("leaves DSWx water bands blank (built-in categorical colormap)", () => {
+    expect(bandRenderDefaults("OPERA_L3_DSWX-HLS_V1", "B01_WTR")).toEqual({
+      rescale: "",
+      colormapName: "",
+    });
+  });
+
+  it("suggests a terrain ramp for DEM", () => {
+    expect(bandRenderDefaults("OPERA_L3_DSWX-HLS_V1", "B10_DEM")).toEqual({
+      rescale: "0,3000",
+      colormapName: "terrain",
+    });
+  });
+
+  it("suggests a grayscale stretch for SAR polarizations", () => {
+    expect(bandRenderDefaults("OPERA_L2_RTC-S1_V1", "VV")).toEqual({
+      rescale: "0,0.4",
+      colormapName: "gray",
+    });
+  });
+
+  it("returns blanks for an unknown band with no product defaults", () => {
+    expect(bandRenderDefaults("OPERA_L3_DSWX-HLS_V1", "B07_LAND")).toEqual({
+      rescale: "",
+      colormapName: "",
+    });
   });
 });
 

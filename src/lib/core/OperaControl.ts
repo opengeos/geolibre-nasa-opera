@@ -6,7 +6,7 @@ import {
   searchGranules,
 } from "../opera/cmr";
 import { colormapForBand } from "../opera/colormaps";
-import { getProduct, OPERA_PRODUCTS } from "../opera/products";
+import { bandRenderDefaults, getProduct, OPERA_PRODUCTS } from "../opera/products";
 import {
   buildTileJsonUrl,
   DEFAULT_TITILER_CMR_ENDPOINT,
@@ -120,6 +120,8 @@ export class OperaControl implements IControl {
   private _status?: HTMLElement;
   private _tableBody?: HTMLElement;
   private _bandSelect?: HTMLSelectElement;
+  private _rescaleInput?: HTMLInputElement;
+  private _colormapSelect?: HTMLSelectElement;
   private _displayBtn?: HTMLButtonElement;
   private _options: OperaControlOptions;
   private _state: OperaState;
@@ -193,6 +195,8 @@ export class OperaControl implements IControl {
     this._status = undefined;
     this._tableBody = undefined;
     this._bandSelect = undefined;
+    this._rescaleInput = undefined;
+    this._colormapSelect = undefined;
     this._displayBtn = undefined;
   }
 
@@ -613,9 +617,24 @@ export class OperaControl implements IControl {
     group.appendChild(label("Layer / band"));
     const select = document.createElement("select");
     select.className = "plugin-control-input opera-select";
+    select.addEventListener("change", () => this._applyBandDefaults(select.value));
     this._bandSelect = select;
     group.appendChild(select);
     return group;
+  }
+
+  /**
+   * Populate the Rendering fields with the selected band's default rescale +
+   * colormap, so the applied rendering is visible and tweakable. Categorical
+   * water bands populate blanks (their built-in class colormap applies).
+   */
+  private _applyBandDefaults(band: string): void {
+    if (!band) return;
+    const defaults = bandRenderDefaults(this._state.product, band);
+    this._state.rescale = defaults.rescale;
+    this._state.colormapName = defaults.colormapName;
+    if (this._rescaleInput) this._rescaleInput.value = defaults.rescale;
+    if (this._colormapSelect) this._colormapSelect.value = defaults.colormapName;
   }
 
   private _populateBands(): void {
@@ -637,6 +656,9 @@ export class OperaControl implements IControl {
       opt.disabled = true;
       opt.selected = true;
       select.appendChild(opt);
+    } else {
+      // Auto-fill the Rendering fields for the selected band.
+      this._applyBandDefaults(select.value);
     }
   }
 
@@ -657,6 +679,7 @@ export class OperaControl implements IControl {
     rescale.addEventListener("input", () => {
       this._state.rescale = rescale.value;
     });
+    this._rescaleInput = rescale;
     rescaleGroup.appendChild(rescale);
 
     const cmapGroup = el("div", "plugin-control-group");
@@ -674,6 +697,7 @@ export class OperaControl implements IControl {
     cmap.addEventListener("change", () => {
       this._state.colormapName = cmap.value;
     });
+    this._colormapSelect = cmap;
     cmapGroup.appendChild(cmap);
 
     wrap.append(rescaleGroup, cmapGroup);
