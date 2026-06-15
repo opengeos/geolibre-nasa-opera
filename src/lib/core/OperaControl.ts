@@ -133,7 +133,6 @@ export class OperaControl implements IControl {
 
   private _resizeHandler: (() => void) | null = null;
   private _mapResizeHandler: (() => void) | null = null;
-  private _clickOutsideHandler: ((e: MouseEvent) => void) | null = null;
 
   constructor(options: OperaControlOptions = {}) {
     this._options = options;
@@ -180,10 +179,6 @@ export class OperaControl implements IControl {
     if (this._mapResizeHandler && this._map) {
       this._map.off("resize", this._mapResizeHandler);
       this._mapResizeHandler = null;
-    }
-    if (this._clickOutsideHandler) {
-      document.removeEventListener("click", this._clickOutsideHandler);
-      this._clickOutsideHandler = null;
     }
     this._clearLayers();
     this._panel?.parentNode?.removeChild(this._panel);
@@ -770,19 +765,8 @@ export class OperaControl implements IControl {
   // --- Positioning (adapted from the template's PluginControl) -----------
 
   private _setupEventListeners(): void {
-    this._clickOutsideHandler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (
-        this._container &&
-        this._panel &&
-        !this._container.contains(target) &&
-        !this._panel.contains(target)
-      ) {
-        this.collapse();
-      }
-    };
-    document.addEventListener("click", this._clickOutsideHandler);
-
+    // The panel stays open until the user clicks the toggle button or the X
+    // close button; it does not collapse on click-outside.
     this._resizeHandler = () => {
       if (!this._state.collapsed) this._updatePanelPosition();
     };
