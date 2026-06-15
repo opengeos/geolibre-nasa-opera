@@ -356,11 +356,16 @@
   gap: 10px;
 }
 
-/* Rubber-band rectangle drawn over the map while picking a bbox. */
+/*
+ * Rubber-band rectangle drawn over the map while picking a bbox. It is appended
+ * to the map container (outside the .plugin-control scope), so the --pc-*
+ * variables are not in scope here; use concrete colors with the theme vars only
+ * as an optional fallback.
+ */
 .opera-draw-rect {
   position: absolute;
-  border: 2px dashed var(--pc-accent);
-  background: var(--pc-accent-ring);
+  border: 2px dashed var(--pc-accent, #2b7fff);
+  background: var(--pc-accent-ring, rgba(43, 127, 255, 0.18));
   pointer-events: none;
   z-index: 500;
 }
