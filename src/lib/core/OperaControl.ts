@@ -24,6 +24,7 @@ import {
 import {
   bandRenderDefaults,
   expressionPresets,
+  type ExpressionPreset,
   getProduct,
   OPERA_PIXEL_SIZE_METERS,
   OPERA_PRODUCTS,
@@ -156,6 +157,8 @@ export class OperaControl implements IControl {
   private _colormapSelect?: HTMLSelectElement;
   private _expressionInput?: HTMLInputElement;
   private _expressionPresetSelect?: HTMLSelectElement;
+  private _expressionHint?: HTMLElement;
+  private _currentExpressionPresets: ExpressionPreset[] = [];
   private _displayBtn?: HTMLButtonElement;
   private _downloadBandBtn?: HTMLButtonElement;
   private _downloadAllBtn?: HTMLButtonElement;
@@ -262,6 +265,7 @@ export class OperaControl implements IControl {
     this._colormapSelect = undefined;
     this._expressionInput = undefined;
     this._expressionPresetSelect = undefined;
+    this._expressionHint = undefined;
     this._displayBtn = undefined;
     this._downloadBandBtn = undefined;
     this._downloadAllBtn = undefined;
@@ -388,6 +392,7 @@ export class OperaControl implements IControl {
         ? undefined
         : colormapForBand(product.shortName, band);
 
+    this._setDisplayBusy(true);
     this._setStatus(
       `Requesting ${selected.length} granule(s) from titiler-cmr…`,
     );
@@ -456,7 +461,18 @@ export class OperaControl implements IControl {
       this._setStatus(
         `Display failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      this._setDisplayBusy(false);
     }
+  }
+
+  /** Toggle the Display button's loading state. */
+  private _setDisplayBusy(busy: boolean): void {
+    const btn = this._displayBtn;
+    if (!btn) return;
+    btn.classList.toggle("opera-busy", busy);
+    btn.disabled = busy;
+    btn.textContent = busy ? "Displaying…" : "Display";
   }
 
   /**
@@ -1121,6 +1137,7 @@ export class OperaControl implements IControl {
     rescale.dataset.field = "rescale";
     rescale.addEventListener("input", () => {
       this._state.rescale = rescale.value;
+      this._updateExpressionHint();
     });
     this._rescaleInput = rescale;
     rescaleGroup.appendChild(rescale);
@@ -1162,8 +1179,10 @@ export class OperaControl implements IControl {
     presets.title = "Insert a ready-made expression";
     this._expressionPresetSelect = presets;
     presets.addEventListener("change", () => {
-      if (!presets.value) return;
-      this._setExpression(presets.value);
+      const preset = this._currentExpressionPresets.find(
+        (p) => p.expression === presets.value,
+      );
+      if (preset) this._applyExpressionPreset(preset);
       presets.selectedIndex = 0; // reset to the "Presets…" placeholder
     });
     row.appendChild(presets);
@@ -1177,18 +1196,52 @@ export class OperaControl implements IControl {
     input.dataset.field = "expression";
     input.addEventListener("input", () => {
       this._state.expression = input.value;
+      this._updateExpressionHint();
     });
     this._expressionInput = input;
     group.appendChild(input);
 
+    const hint = el("div", "opera-expr-hint");
+    hint.textContent =
+      "Set a Rescale (min,max) above so the computed result displays.";
+    this._expressionHint = hint;
+    group.appendChild(hint);
+
     this._refreshExpressionPresets();
+    this._updateExpressionHint();
     return group;
   }
 
-  /** Set the expression field + state (used by the presets dropdown). */
+  /** Apply a preset's expression plus its rescale/colormap, if any. */
+  private _applyExpressionPreset(preset: ExpressionPreset): void {
+    this._setExpression(preset.expression);
+    if (preset.rescale != null) {
+      this._state.rescale = preset.rescale;
+      if (this._rescaleInput) this._rescaleInput.value = preset.rescale;
+    }
+    if (preset.colormapName != null) {
+      this._state.colormapName = preset.colormapName;
+      if (this._colormapSelect) this._colormapSelect.value = preset.colormapName;
+    }
+    this._updateExpressionHint();
+  }
+
+  /**
+   * Show a hint when an expression is set but no rescale is given: a computed
+   * value rarely matches the band's default stretch, so it would render flat.
+   */
+  private _updateExpressionHint(): void {
+    if (!this._expressionHint) return;
+    const needsRescale =
+      !!this._state.expression.trim() && !this._state.rescale.trim();
+    this._expressionHint.style.display = needsRescale ? "block" : "none";
+  }
+
+  /** Set the expression field + state. */
   private _setExpression(value: string): void {
     this._state.expression = value;
     if (this._expressionInput) this._expressionInput.value = value;
+    this._updateExpressionHint();
   }
 
   /** Rebuild the presets dropdown for the active product/band. */
@@ -1197,6 +1250,7 @@ export class OperaControl implements IControl {
     if (!select) return;
     const band = this._bandSelect?.value;
     const presets = expressionPresets(this._state.product, band);
+    this._currentExpressionPresets = presets;
     select.innerHTML = "";
     const placeholder = document.createElement("option");
     placeholder.value = "";
