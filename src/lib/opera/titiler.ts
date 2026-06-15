@@ -46,6 +46,12 @@ export interface TileJsonParams {
    * categorical layers like DSWx water classification).
    */
   colormap?: string;
+  /**
+   * rio-tiler band-math expression computed on the fly, e.g. `10*log10(b1)` for
+   * dB. Bands are referenced as `b1`, `b2`, ... in the order of `bands`/`assets`
+   * (sent with `asset_as_band=true`). Overrides plain band rendering.
+   */
+  expression?: string;
 }
 
 export interface TileJson {
@@ -57,6 +63,18 @@ export interface TileJson {
 
 /** TileMatrixSet id used for the XYZ tile grid. */
 const TILE_MATRIX_SET = "WebMercatorQuad";
+
+/**
+ * Apply a band-math `expression` to a query. titiler evaluates expressions over
+ * bands named `b1`, `b2`, ... so `asset_as_band=true` is sent alongside it to
+ * map each requested asset onto a band. No-op when `expression` is blank.
+ */
+function applyExpression(query: URLSearchParams, expression?: string): void {
+  const expr = expression?.trim();
+  if (!expr) return;
+  query.set("expression", expr);
+  query.set("asset_as_band", "true");
+}
 
 /**
  * Build the titiler-cmr `tilejson.json` request URL (current API).
@@ -79,6 +97,7 @@ export function buildTileJsonUrl(params: TileJsonParams): string {
   if (params.datetime) query.set("temporal", params.datetime);
   for (const band of params.bands ?? []) query.append("assets", band);
   if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
+  applyExpression(query, params.expression);
   // An explicit categorical colormap wins over a min/max stretch; sending both
   // would rescale the class values before indexing the colormap.
   if (params.colormap) {
@@ -120,6 +139,8 @@ export interface PointQueryParams {
   bands?: string[];
   /** Regex titiler-cmr uses to discover band assets within a granule. */
   bandsRegex?: string;
+  /** rio-tiler band-math expression (bands as `b1`, `b2`, ...); see TileJsonParams. */
+  expression?: string;
 }
 
 /** Pixel values for one asset (granule file) at the queried point. */
@@ -158,6 +179,7 @@ export function buildPointUrl(params: PointQueryParams): string {
   if (params.datetime) query.set("temporal", params.datetime);
   for (const band of params.bands ?? []) query.append("assets", band);
   if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
+  applyExpression(query, params.expression);
   return `${base}/${params.backend}/point/${params.lon},${params.lat}?${query.toString()}`;
 }
 
@@ -215,6 +237,8 @@ export interface StatisticsQueryParams {
    * gives a smoother distribution for choosing a rescale.
    */
   histogramBins?: number;
+  /** rio-tiler band-math expression (bands as `b1`, `b2`, ...); see TileJsonParams. */
+  expression?: string;
 }
 
 /** Per-band statistics returned by titiler-cmr `/statistics`. */
@@ -263,6 +287,7 @@ export function buildStatisticsUrl(params: StatisticsQueryParams): string {
   if (params.datetime) query.set("temporal", params.datetime);
   for (const band of params.bands ?? []) query.append("assets", band);
   if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
+  applyExpression(query, params.expression);
   if (params.categorical) {
     query.set("categorical", "true");
   } else if (params.histogramBins) {

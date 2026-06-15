@@ -118,6 +118,29 @@ export function getProduct(shortName: string): OperaProduct | undefined {
  */
 export const OPERA_PIXEL_SIZE_METERS = 30;
 
+/** A ready-made band-math expression offered as a preset. */
+export interface ExpressionPreset {
+  /** Short label shown in the presets dropdown. */
+  label: string;
+  /** rio-tiler expression; the selected band is `b1`. */
+  expression: string;
+}
+
+/**
+ * Ready-made band-math expressions for a product/band, shown as presets next to
+ * the Expression field. The selected band is referenced as `b1`.
+ */
+export function expressionPresets(
+  shortName: string,
+  band?: string,
+): ExpressionPreset[] {
+  // RTC-S1 backscatter (linear power, gamma-0): the standard view is decibels.
+  if (/RTC-S1/i.test(shortName) && /^(VV|VH|HH|HV)$/i.test(band ?? "")) {
+    return [{ label: "Backscatter dB (10·log10)", expression: "10*log10(b1)" }];
+  }
+  return [];
+}
+
 /** Suggested rescale + colormap for a given band, shown in the Rendering UI. */
 export interface BandRender {
   /** Rescale "min,max"; blank means none. */

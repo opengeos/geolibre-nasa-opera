@@ -356,6 +356,23 @@
   gap: 10px;
 }
 
+/* Compact band-math expression presets dropdown (in the field's label row). */
+.opera-expr-presets {
+  font-size: 11px;
+  max-width: 60%;
+  color: var(--pc-accent);
+  background: var(--pc-input-bg);
+  border: 1px solid var(--pc-input-border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  cursor: pointer;
+}
+
+.opera-expr-presets:disabled {
+  color: var(--pc-muted);
+  cursor: not-allowed;
+}
+
 /*
  * Rubber-band rectangle drawn over the map while picking a bbox. It is appended
  * to the map container (outside the .plugin-control scope), so the --pc-*
