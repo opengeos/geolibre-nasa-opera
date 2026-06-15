@@ -1,6 +1,6 @@
 {
   "name": "geolibre-nasa-opera",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "GeoLibre plugin to search and visualize NASA OPERA products via CMR and titiler-cmr",
   "type": "module",
   "main": "./dist/index.cjs",

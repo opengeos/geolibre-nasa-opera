@@ -47,7 +47,7 @@ function isOperaState(value: unknown): value is Partial<OperaState> {
 export const plugin: GeoLibrePlugin<OperaControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
-  version: "0.1.0",
+  version: "0.2.0",
   activate(app) {
     control = control ?? createControl(app);
     const added = app.addMapControl(control, position);
