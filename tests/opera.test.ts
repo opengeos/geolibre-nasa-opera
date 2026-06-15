@@ -92,8 +92,16 @@ describe("expressionPresets", () => {
     expect(presets[0].expression).toBe("10*log10(b1)");
   });
 
-  it("returns no presets for non-backscatter products/bands", () => {
-    expect(expressionPresets("OPERA_L3_DSWX-HLS_V1", "B01_WTR")).toEqual([]);
+  it("offers water-mask presets for DSWx WTR bands", () => {
+    const presets = expressionPresets("OPERA_L3_DSWX-HLS_V1", "B01_WTR");
+    expect(presets.map((p) => p.expression)).toEqual([
+      "where(b1==1,1,0)",
+      "where((b1==1)|(b1==2),1,0)",
+    ]);
+  });
+
+  it("returns no presets for bands without a preset", () => {
+    expect(expressionPresets("OPERA_L3_DSWX-HLS_V1", "B10_DEM")).toEqual([]);
     expect(expressionPresets("OPERA_L2_RTC-S1_V1", "B10_DEM")).toEqual([]);
   });
 });

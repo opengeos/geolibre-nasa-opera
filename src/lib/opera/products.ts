@@ -134,9 +134,22 @@ export function expressionPresets(
   shortName: string,
   band?: string,
 ): ExpressionPreset[] {
+  const b = band ?? "";
   // RTC-S1 backscatter (linear power, gamma-0): the standard view is decibels.
-  if (/RTC-S1/i.test(shortName) && /^(VV|VH|HH|HV)$/i.test(band ?? "")) {
+  if (/RTC-S1/i.test(shortName) && /^(VV|VH|HH|HV)$/i.test(b)) {
     return [{ label: "Backscatter dB (10·log10)", expression: "10*log10(b1)" }];
+  }
+  // DSWx water classification: binary masks isolating water classes (1 = open
+  // water, 2 = partial surface water). The output is 1 inside the class(es), 0
+  // elsewhere, so its mean over an AOI is the water fraction.
+  if (/DSWX/i.test(shortName) && /WTR/i.test(b)) {
+    return [
+      { label: "Open-water mask (class 1)", expression: "where(b1==1,1,0)" },
+      {
+        label: "Surface-water mask (1+2)",
+        expression: "where((b1==1)|(b1==2),1,0)",
+      },
+    ];
   }
   return [];
 }

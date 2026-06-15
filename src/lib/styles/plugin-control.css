@@ -41,6 +41,19 @@
 }
 
 /*
+ * Border-box for everything in the control/panel so full-width inputs, selects,
+ * and buttons include their padding/border within 100% and never overflow the
+ * panel. GeoLibre applies a global reset, but the standalone build does not, so
+ * the plugin sets its own (scoped) reset to stay self-contained.
+ */
+.plugin-control,
+.plugin-control *,
+.plugin-control-panel,
+.plugin-control-panel * {
+  box-sizing: border-box;
+}
+
+/*
  * Container - matches maplibregl-ctrl styling.
  * The `.maplibregl-ctrl-group` part raises specificity above MapLibre's own
  * `.maplibregl-ctrl-group { background: #fff }` rule, which otherwise wins on
