@@ -281,6 +281,37 @@ function toOptNum(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/** Parse one titiler-cmr per-band statistics object into {@link BandStatistics}. */
+function parseBandStatistics(s: Record<string, unknown>): BandStatistics {
+  return {
+    min: toNum(s.min),
+    max: toNum(s.max),
+    mean: toNum(s.mean),
+    std: toNum(s.std),
+    median: toOptNum(s.median),
+    count: toNum(s.count),
+    validPixels: toOptNum(s.valid_pixels),
+    validPercent: toOptNum(s.valid_percent),
+    histogram: Array.isArray(s.histogram)
+      ? (s.histogram as [number[], number[]])
+      : undefined,
+    percentile2: toOptNum(s.percentile_2),
+    percentile98: toOptNum(s.percentile_98),
+    description: typeof s.description === "string" ? s.description : undefined,
+  };
+}
+
+/** Parse a `statistics` map (`{ bandName: {...} }`) into {@link BandStatistics}. */
+function parseStatisticsMap(
+  raw: Record<string, Record<string, unknown>>,
+): Record<string, BandStatistics> {
+  const bands: Record<string, BandStatistics> = {};
+  for (const [name, s] of Object.entries(raw)) {
+    bands[name] = parseBandStatistics(s);
+  }
+  return bands;
+}
+
 /**
  * POST a GeoJSON AOI to titiler-cmr `/statistics` and parse the per-band stats.
  *
@@ -305,28 +336,100 @@ export async function fetchStatistics(
   const json = (await res.json()) as {
     properties?: { statistics?: Record<string, Record<string, unknown>> };
   };
-  const raw = json.properties?.statistics ?? {};
-  const bands: Record<string, BandStatistics> = {};
-  for (const [name, s] of Object.entries(raw)) {
-    bands[name] = {
-      min: toNum(s.min),
-      max: toNum(s.max),
-      mean: toNum(s.mean),
-      std: toNum(s.std),
-      median: toOptNum(s.median),
-      count: toNum(s.count),
-      validPixels: toOptNum(s.valid_pixels),
-      validPercent: toOptNum(s.valid_percent),
-      histogram: Array.isArray(s.histogram)
-        ? (s.histogram as [number[], number[]])
-        : undefined,
-      percentile2: toOptNum(s.percentile_2),
-      percentile98: toOptNum(s.percentile_98),
-      description:
-        typeof s.description === "string" ? s.description : undefined,
-    };
+  return { bands: parseStatisticsMap(json.properties?.statistics ?? {}) };
+}
+
+/** Parameters for a titiler-cmr `/timeseries/statistics` query. */
+export interface TimeseriesQueryParams {
+  /** Base titiler-cmr endpoint, no trailing slash. */
+  endpoint: string;
+  /** CMR collection concept-id. */
+  conceptId: string;
+  /** Reader backend; OPERA products use "rasterio". */
+  backend: TitilerBackend;
+  /** Temporal window "start/end" (RFC3339) the series spans. */
+  datetime: string;
+  /** ISO 8601 step duration between intervals (e.g. "P1M", "P10D"). */
+  step: string;
+  /** Band token(s) to summarize. */
+  bands?: string[];
+  /** Regex titiler-cmr uses to discover band assets within a granule. */
+  bandsRegex?: string;
+  /** Request per-class histograms (for class areas like open water). */
+  categorical?: boolean;
+}
+
+/** One time step of a {@link TimeseriesResult}. */
+export interface TimeseriesStep {
+  /** Interval key as returned, e.g. "2024-05-01.../2024-05-31...". */
+  interval: string;
+  /** Interval start timestamp (the part before "/"). */
+  start: string;
+  /** Per-band statistics for this interval, keyed by band name. */
+  bands: Record<string, BandStatistics>;
+}
+
+/** Result of {@link fetchTimeseries}: per-interval statistics, time-ordered. */
+export interface TimeseriesResult {
+  steps: TimeseriesStep[];
+}
+
+/**
+ * Build a titiler-cmr `/timeseries/statistics` request URL.
+ *
+ * Path: `{endpoint}/{backend}/timeseries/statistics` (POST a GeoJSON Feature).
+ * Unlike `/statistics`, this is NOT pinned to a granule: titiler-cmr iterates
+ * CMR over `temporal` in `step`-sized intervals and returns stats per interval.
+ * Verified live against the staging endpoint.
+ */
+export function buildTimeseriesUrl(params: TimeseriesQueryParams): string {
+  const base = params.endpoint.replace(/\/+$/, "");
+  const query = new URLSearchParams();
+  query.set("collection_concept_id", params.conceptId);
+  query.set("temporal", params.datetime);
+  query.set("step", params.step);
+  for (const band of params.bands ?? []) query.append("assets", band);
+  if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
+  if (params.categorical) query.set("categorical", "true");
+  return `${base}/${params.backend}/timeseries/statistics?${query.toString()}`;
+}
+
+/**
+ * POST a GeoJSON Feature to titiler-cmr `/timeseries/statistics` and parse the
+ * per-interval statistics. titiler-cmr echoes the Feature back with
+ * `properties.statistics` keyed by time interval; each value is the same
+ * per-band stats map as `/statistics`. Steps are returned time-ordered.
+ */
+export async function fetchTimeseries(
+  url: string,
+  feature: unknown,
+): Promise<TimeseriesResult> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(feature),
+  });
+  if (!res.ok) {
+    throw new Error(`titiler-cmr timeseries request failed (${res.status})`);
   }
-  return { bands };
+  const json = (await res.json()) as {
+    properties?: {
+      statistics?: Record<string, Record<string, Record<string, unknown>>>;
+    };
+  };
+  const raw = json.properties?.statistics ?? {};
+  const steps: TimeseriesStep[] = Object.entries(raw).map(
+    ([interval, bandMap]) => ({
+      interval,
+      start: interval.split("/")[0],
+      bands: parseStatisticsMap(bandMap),
+    }),
+  );
+  steps.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  return { steps };
 }
 
 /** Fetch a TileJSON document from titiler-cmr. */

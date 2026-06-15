@@ -5,8 +5,10 @@ import {
   buildPointUrl,
   buildStatisticsUrl,
   buildTileJsonUrl,
+  buildTimeseriesUrl,
   fetchPoint,
   fetchStatistics,
+  fetchTimeseries,
   granuleDatetime,
   tileSizeFromTemplate,
 } from "../src/lib/opera/titiler";
@@ -285,6 +287,80 @@ describe("fetchStatistics", () => {
     await expect(
       fetchStatistics("https://host/statistics", {}),
     ).rejects.toThrow(/statistics request failed \(422\)/);
+  });
+});
+
+describe("buildTimeseriesUrl", () => {
+  it("builds the /timeseries/statistics path with temporal + step (no granule_ur)", () => {
+    const url = buildTimeseriesUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C123-POCLOUD",
+      backend: "rasterio",
+      datetime: "2024-05-01T00:00:00Z/2024-07-31T23:59:59Z",
+      step: "P1M",
+      bands: ["B01_WTR"],
+      bandsRegex: "B[0-9]{2}_[A-Z]+",
+      categorical: true,
+    });
+    expect(url).toContain("/rasterio/timeseries/statistics?");
+    expect(url).toContain("collection_concept_id=C123-POCLOUD");
+    expect(url).toContain("step=P1M");
+    expect(url).toContain("temporal=");
+    expect(url).toContain("assets=B01_WTR");
+    expect(url).toContain("categorical=true");
+    expect(url).not.toContain("granule_ur");
+  });
+});
+
+describe("fetchTimeseries", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("parses per-interval statistics, time-ordered", async () => {
+    const step = (mean: number) => ({ min: 0, max: 1, mean, std: 0, count: 1 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          type: "Feature",
+          properties: {
+            statistics: {
+              // Deliberately out of order to check sorting.
+              "2024-07-01T00:00:00+00:00/2024-07-31T23:59:59+00:00": {
+                b1: step(3),
+              },
+              "2024-05-01T00:00:00+00:00/2024-05-31T23:59:59+00:00": {
+                b1: step(1),
+              },
+              "2024-06-01T00:00:00+00:00/2024-06-30T23:59:59+00:00": {
+                b1: step(2),
+              },
+            },
+          },
+        }),
+      })),
+    );
+    const result = await fetchTimeseries("https://host/timeseries", {
+      type: "Feature",
+    });
+    expect(result.steps.map((s) => s.start.slice(0, 7))).toEqual([
+      "2024-05",
+      "2024-06",
+      "2024-07",
+    ]);
+    expect(result.steps.map((s) => s.bands.b1.mean)).toEqual([1, 2, 3]);
+  });
+
+  it("throws on a non-OK response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })),
+    );
+    await expect(
+      fetchTimeseries("https://host/timeseries", {}),
+    ).rejects.toThrow(/timeseries request failed \(500\)/);
   });
 });
 

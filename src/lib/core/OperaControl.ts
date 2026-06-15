@@ -31,14 +31,17 @@ import {
   buildPointUrl,
   buildStatisticsUrl,
   buildTileJsonUrl,
+  buildTimeseriesUrl,
   DEFAULT_TITILER_CMR_ENDPOINT,
   fetchPoint,
   fetchStatistics,
   fetchTileJson,
+  fetchTimeseries,
   tileSizeFromTemplate,
   type BandStatistics,
   type PointResult,
   type StatisticsResult,
+  type TimeseriesResult,
 } from "../opera/titiler";
 import type {
   BBox,
@@ -66,6 +69,8 @@ export interface OperaState {
   rescale: string;
   /** Optional named colormap override; blank uses the product/band default. */
   colormapName: string;
+  /** ISO 8601 step duration for the time-series chart (e.g. "P1M"). */
+  tsStep: string;
   /** titiler-cmr endpoint. */
   endpoint: string;
 }
@@ -191,6 +196,10 @@ export class OperaControl implements IControl {
   private _statsBtn?: HTMLButtonElement;
   private _statsPanel?: HTMLElement;
 
+  // Temporal analysis (titiler-cmr /timeseries/statistics) UI.
+  private _tsBtn?: HTMLButtonElement;
+  private _tsPanel?: HTMLElement;
+
   constructor(options: OperaControlOptions = {}) {
     this._options = options;
     const { start, end } = defaultDateRange();
@@ -204,6 +213,7 @@ export class OperaControl implements IControl {
       count: 50,
       rescale: "",
       colormapName: "",
+      tsStep: "P1M",
       endpoint: DEFAULT_TITILER_CMR_ENDPOINT,
     };
   }
@@ -260,6 +270,8 @@ export class OperaControl implements IControl {
     this._inspectBtn = undefined;
     this._statsBtn = undefined;
     this._statsPanel = undefined;
+    this._tsBtn = undefined;
+    this._tsPanel = undefined;
   }
 
   // --- State -------------------------------------------------------------
@@ -501,6 +513,7 @@ export class OperaControl implements IControl {
     if (this._downloadAllBtn) this._downloadAllBtn.disabled = !hasSelection;
     if (this._inspectBtn) this._inspectBtn.disabled = !hasSelection || !hasBand;
     if (this._statsBtn) this._statsBtn.disabled = !hasSelection || !hasBand;
+    if (this._tsBtn) this._tsBtn.disabled = !hasSelection || !hasBand;
     // A selection change can invalidate the band being inspected; leave inspect
     // mode if there is nothing left to query.
     if (this._inspecting && (!hasSelection || !hasBand)) this._stopInspect();
@@ -801,6 +814,8 @@ export class OperaControl implements IControl {
     content.appendChild(this._buildInspectButton());
     content.appendChild(this._buildStatisticsButton());
     content.appendChild(this._buildStatsPanel());
+    content.appendChild(this._buildTimeseriesGroup());
+    content.appendChild(this._buildTimeseriesPanel());
     content.appendChild(this._buildDownloadGroup());
 
     // Spacing between the Display action and the endpoint settings below.
@@ -972,8 +987,10 @@ export class OperaControl implements IControl {
     if (this._downloadAllBtn) this._downloadAllBtn.disabled = true;
     if (this._inspectBtn) this._inspectBtn.disabled = true;
     if (this._statsBtn) this._statsBtn.disabled = true;
+    if (this._tsBtn) this._tsBtn.disabled = true;
     this._stopInspect();
     this._clearStats();
+    this._clearTimeseries();
     this._clearHighlight();
     this._renderRows();
   }
@@ -1530,6 +1547,178 @@ export class OperaControl implements IControl {
     this._setStatsContent(header + blocks.join(""));
   }
 
+  // --- Temporal analysis (titiler-cmr /timeseries/statistics) ------------
+
+  private _buildTimeseriesGroup(): HTMLElement {
+    const row = el("div", "opera-ts-controls");
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "plugin-control-button opera-secondary-button";
+    btn.textContent = "Time series";
+    btn.title =
+      "Chart the selected band over the date range for the current AOI";
+    btn.disabled = true;
+    btn.addEventListener("click", () => void this._onTimeseries());
+    this._tsBtn = btn;
+
+    const step = document.createElement("select");
+    step.className = "plugin-control-input opera-select opera-ts-step";
+    step.dataset.field = "tsStep";
+    step.title = "Time step between intervals";
+    const STEPS: Array<[string, string]> = [
+      ["P1M", "Monthly"],
+      ["P10D", "10-day"],
+      ["P1W", "Weekly"],
+      ["P1D", "Daily"],
+    ];
+    for (const [value, label] of STEPS) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      if (value === this._state.tsStep) opt.selected = true;
+      step.appendChild(opt);
+    }
+    step.addEventListener("change", () => {
+      this._state.tsStep = step.value;
+    });
+
+    row.append(btn, step);
+    return row;
+  }
+
+  private _buildTimeseriesPanel(): HTMLElement {
+    const panel = el("div", "opera-ts");
+    panel.addEventListener("click", (ev) => {
+      if ((ev.target as HTMLElement | null)?.closest(".opera-ts-download")) {
+        this._downloadTimeseries();
+      }
+    });
+    this._tsPanel = panel;
+    return panel;
+  }
+
+  private _clearTimeseries(): void {
+    if (this._tsPanel) this._tsPanel.innerHTML = "";
+  }
+
+  private _setTimeseriesContent(html: string): void {
+    if (this._tsPanel) this._tsPanel.innerHTML = html;
+  }
+
+  /**
+   * Compute a temporal profile of the selected band over the date range for the
+   * current AOI. Unlike Statistics, this is not pinned to a granule: titiler-cmr
+   * iterates CMR over the window in `tsStep`-sized intervals.
+   */
+  private async _onTimeseries(): Promise<void> {
+    const product = getProduct(this._state.product);
+    const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
+    if (!product || selected.length === 0) {
+      this._setStatus("Select a granule first.");
+      return;
+    }
+    const aoi = this._aoiFeature();
+    if (!aoi) {
+      this._setStatus(
+        "Set a bounding box (type it, Use map extent, or Draw) for the AOI.",
+      );
+      return;
+    }
+    if (!this._state.start || !this._state.end) {
+      this._setStatus("Set a start and end date for the time series.");
+      return;
+    }
+    const band = this._bandSelect?.value || product.render.bands?.[0];
+    const categorical = isDswxWaterBand(product.shortName, band);
+    const datetime = `${this._state.start}T00:00:00Z/${this._state.end}T23:59:59Z`;
+    this._setTimeseriesContent(
+      `<div class="opera-stats-loading">Computing time series… (this can take a while for long ranges)</div>`,
+    );
+    this._setStatus("Computing time series…");
+    try {
+      const conceptId =
+        selected[0].conceptId ?? (await resolveConceptId(product.shortName));
+      const url = buildTimeseriesUrl({
+        endpoint: this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT,
+        conceptId,
+        backend: product.render.backend,
+        datetime,
+        step: this._state.tsStep || "P1M",
+        bands: band ? [band] : product.render.bands,
+        bandsRegex: product.render.bandsRegex,
+        categorical,
+      });
+      const result = await fetchTimeseries(url, aoi.feature);
+      this._renderTimeseries(result, band, product.shortName);
+      this._setStatus(`Time series: ${result.steps.length} step(s).`);
+    } catch (err) {
+      this._clearTimeseries();
+      this._setStatus(
+        `Time series failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private _renderTimeseries(
+    result: TimeseriesResult,
+    band: string | undefined,
+    shortName: string,
+  ): void {
+    const water = isDswxWaterBand(shortName, band);
+    const series = result.steps.map((step) => {
+      const bs = Object.values(step.bands)[0];
+      let value = NaN;
+      if (bs) {
+        value = water
+          ? pixelsToKm2(classCount(bs, DSWX_OPEN_WATER_CLASS))
+          : bs.mean;
+      }
+      return { label: step.start.slice(0, 10), value };
+    });
+    const metric = water ? "Open-water area (km²)" : `Mean ${band ?? "value"}`;
+    if (!series.some((p) => Number.isFinite(p.value))) {
+      this._setTimeseriesContent(
+        `<div class="opera-stats-title">${escapeHtml(
+          band ?? "band",
+        )} — time series</div><div class="opera-stats-empty">No data in this window.</div>`,
+      );
+      return;
+    }
+    if (this._tsPanel) {
+      this._tsPanel.dataset.name = `timeseries-${slug(band ?? "band")}-${slug(
+        shortName,
+      )}`;
+    }
+    this._setTimeseriesContent(
+      `<div class="opera-stats-title">${escapeHtml(metric)}</div>` +
+        `<div class="opera-ts-chart">${buildTimeseriesSvg(series, metric)}</div>` +
+        `<button type="button" class="opera-link-button opera-ts-download">Download SVG</button>`,
+    );
+  }
+
+  /** Export the rendered time-series chart (an SVG element) as a file. */
+  private _downloadTimeseries(): void {
+    const svg = this._tsPanel?.querySelector(
+      ".opera-ts-chart svg",
+    ) as SVGElement | null;
+    if (!svg) return;
+    const name = this._tsPanel?.dataset.name || "timeseries";
+    const markup = `<?xml version="1.0" encoding="UTF-8"?>\n${svg.outerHTML}`;
+    const blob = new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    this._setStatus(`Downloaded ${name}.svg.`);
+  }
+
   private _buildDownloadGroup(): HTMLElement {
     const row = el("div", "opera-download-row");
 
@@ -1953,6 +2142,108 @@ function buildHistogramSvg(data: HistogramPayload): string {
     bars +
     axis +
     labels +
+    `</svg>`
+  );
+}
+
+/** Pixel count for a class value in a categorical histogram (0 when absent). */
+function classCount(s: BandStatistics, cls: number): number {
+  const h = s.histogram;
+  if (!h) return 0;
+  const [counts, values] = h;
+  const i = values.indexOf(cls);
+  return i >= 0 ? counts[i] ?? 0 : 0;
+}
+
+/** One point of a time series: an x-axis label and a y value (NaN = gap). */
+interface TimeseriesPoint {
+  label: string;
+  value: number;
+}
+
+/**
+ * Build a self-contained line chart of a time series as an SVG string (explicit
+ * colors, transparent background) so it renders both in-panel and when
+ * downloaded. Non-finite values break the line into segments.
+ */
+function buildTimeseriesSvg(series: TimeseriesPoint[], metric: string): string {
+  const W = 440;
+  const H = 200;
+  const m = { t: 28, r: 16, b: 44, l: 56 };
+  const cw = W - m.l - m.r;
+  const ch = H - m.t - m.b;
+  const finite = series
+    .filter((p) => Number.isFinite(p.value))
+    .map((p) => p.value);
+  const maxV = finite.length ? Math.max(...finite) : 1;
+  const minV = finite.length ? Math.min(...finite) : 0;
+  const lo = Math.min(0, minV);
+  const hi = maxV > lo ? maxV : lo + 1;
+  const n = series.length;
+  const xAt = (i: number) => m.l + (n <= 1 ? cw / 2 : (i / (n - 1)) * cw);
+  const yAt = (v: number) => m.t + ch - ((v - lo) / (hi - lo)) * ch;
+
+  let path = "";
+  let pen = false;
+  series.forEach((p, i) => {
+    if (Number.isFinite(p.value)) {
+      path += `${pen ? "L" : "M"}${xAt(i).toFixed(1)} ${yAt(p.value).toFixed(
+        1,
+      )} `;
+      pen = true;
+    } else {
+      pen = false;
+    }
+  });
+  const line = path
+    ? `<path d="${path.trim()}" fill="none" stroke="#2b7fff" stroke-width="2"/>`
+    : "";
+  const dots = series
+    .map((p, i) =>
+      Number.isFinite(p.value)
+        ? `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(p.value).toFixed(
+            1,
+          )}" r="3" fill="#2b7fff"/>`
+        : "",
+    )
+    .join("");
+
+  const txt = (
+    x: number,
+    y: number,
+    value: string,
+    anchor = "start",
+    size = 11,
+    fill = "#888",
+  ) =>
+    `<text x="${x}" y="${y}" font-size="${size}" text-anchor="${anchor}" fill="${fill}">${escapeHtml(
+      value,
+    )}</text>`;
+
+  const baseY = m.t + ch;
+  let xLabels =
+    txt(m.l, H - 14, series[0]?.label ?? "", "start") +
+    txt(m.l + cw, H - 14, series[n - 1]?.label ?? "", "end");
+  if (n >= 3) {
+    const mid = Math.floor((n - 1) / 2);
+    xLabels += txt(xAt(mid), H - 14, series[mid]?.label ?? "", "middle");
+  }
+  const yLabels =
+    txt(m.l - 6, m.t + 8, formatNumber(hi), "end") +
+    txt(m.l - 6, baseY, formatNumber(lo), "end");
+  const axis =
+    `<line x1="${m.l}" y1="${baseY}" x2="${m.l + cw}" y2="${baseY}" stroke="#bbb"/>` +
+    `<line x1="${m.l}" y1="${m.t}" x2="${m.l}" y2="${baseY}" stroke="#bbb"/>`;
+  const title = txt(W / 2, 16, metric, "middle", 13, "#666");
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="-apple-system, Segoe UI, Roboto, sans-serif">` +
+    axis +
+    line +
+    dots +
+    title +
+    xLabels +
+    yLabels +
     `</svg>`
   );
 }

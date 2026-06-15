@@ -701,3 +701,39 @@
 .opera-stats-apply-rescale {
   margin-top: 6px;
 }
+
+/* Time-series controls (button + step) */
+.opera-ts-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: stretch;
+}
+
+.opera-ts-controls .plugin-control-button {
+  flex: 1;
+}
+
+.opera-ts-step {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+/* Time-series chart panel */
+.opera-ts {
+  margin-top: 8px;
+}
+
+.opera-ts:empty {
+  display: none;
+}
+
+.opera-ts-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.opera-ts-download {
+  margin-top: 2px;
+}
