@@ -16,10 +16,13 @@ import {
 import { colormapForBand } from "../opera/colormaps";
 import { bandRenderDefaults, getProduct, OPERA_PRODUCTS } from "../opera/products";
 import {
+  buildPointUrl,
   buildTileJsonUrl,
   DEFAULT_TITILER_CMR_ENDPOINT,
+  fetchPoint,
   fetchTileJson,
   tileSizeFromTemplate,
+  type PointResult,
 } from "../opera/titiler";
 import type {
   BBox,
@@ -161,6 +164,13 @@ export class OperaControl implements IControl {
   private _drawStart?: { x: number; y: number };
   private _drawStartLngLat?: { lng: number; lat: number };
 
+  // Click-to-inspect (titiler-cmr /point) state.
+  private _inspecting = false;
+  private _inspectBtn?: HTMLButtonElement;
+  private _inspectPopup?: HTMLDivElement;
+  private _inspectLngLat?: { lng: number; lat: number };
+  private _inspectMoveHandler: (() => void) | null = null;
+
   constructor(options: OperaControlOptions = {}) {
     this._options = options;
     const { start, end } = defaultDateRange();
@@ -205,6 +215,8 @@ export class OperaControl implements IControl {
       this._mapResizeHandler = null;
     }
     if (this._drawing) this._endDraw();
+    this._stopInspect();
+    this._removeInspectPopup();
     if (this._map) {
       this._map.off("click", this._onMapClick);
       this._map.off("mousemove", this._onMapMouseMove);
@@ -464,6 +476,10 @@ export class OperaControl implements IControl {
     if (this._downloadBandBtn)
       this._downloadBandBtn.disabled = !hasSelection || !hasBand;
     if (this._downloadAllBtn) this._downloadAllBtn.disabled = !hasSelection;
+    if (this._inspectBtn) this._inspectBtn.disabled = !hasSelection || !hasBand;
+    // A selection change can invalidate the band being inspected; leave inspect
+    // mode if there is nothing left to query.
+    if (this._inspecting && (!hasSelection || !hasBand)) this._stopInspect();
     this._highlightSelectedFootprints();
   }
 
@@ -552,6 +568,12 @@ export class OperaControl implements IControl {
   private _onMapClick = (e: MapMouseEvent): void => {
     const map = this._map;
     if (!map || this._drawing) return;
+    // In inspect mode a map click reads pixel values instead of selecting a
+    // footprint.
+    if (this._inspecting) {
+      void this._inspectAt({ lng: e.lngLat.lng, lat: e.lngLat.lat });
+      return;
+    }
     const hit = map
       .queryRenderedFeatures(e.point)
       .find((f) => f.properties && f.properties._operaGranuleId);
@@ -571,6 +593,10 @@ export class OperaControl implements IControl {
   private _onMapMouseMove = (e: MapMouseEvent): void => {
     const map = this._map;
     if (!map || this._drawing) return;
+    if (this._inspecting) {
+      map.getCanvas().style.cursor = "crosshair";
+      return;
+    }
     const over = map
       .queryRenderedFeatures(e.point)
       .some((f) => f.properties && f.properties._operaGranuleId);
@@ -587,6 +613,7 @@ export class OperaControl implements IControl {
   private _startDraw(): void {
     const map = this._map;
     if (!map) return;
+    this._stopInspect();
     this._drawing = true;
     if (this._drawBtn) this._drawBtn.textContent = "Cancel";
     map.getCanvas().style.cursor = "crosshair";
@@ -747,6 +774,7 @@ export class OperaControl implements IControl {
     content.appendChild(this._buildBandGroup());
     content.appendChild(this._buildRenderGroup());
     content.appendChild(this._buildDisplayButton());
+    content.appendChild(this._buildInspectButton());
     content.appendChild(this._buildDownloadGroup());
 
     // Spacing between the Display action and the endpoint settings below.
@@ -916,6 +944,8 @@ export class OperaControl implements IControl {
     if (this._displayBtn) this._displayBtn.disabled = true;
     if (this._downloadBandBtn) this._downloadBandBtn.disabled = true;
     if (this._downloadAllBtn) this._downloadAllBtn.disabled = true;
+    if (this._inspectBtn) this._inspectBtn.disabled = true;
+    this._stopInspect();
     this._clearHighlight();
     this._renderRows();
   }
@@ -1084,6 +1114,181 @@ export class OperaControl implements IControl {
     this._displayBtn = btn;
     btn.addEventListener("click", () => void this._onDisplay());
     return btn;
+  }
+
+  // --- Click-to-inspect (titiler-cmr /point) -----------------------------
+
+  private _buildInspectButton(): HTMLElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className =
+      "plugin-control-button opera-secondary-button opera-block-button";
+    btn.textContent = "Inspect pixel values";
+    btn.title =
+      "Toggle, then click the map to read the selected band's value at that location";
+    btn.disabled = true;
+    btn.addEventListener("click", () => this._toggleInspect());
+    this._inspectBtn = btn;
+    return btn;
+  }
+
+  private _toggleInspect(): void {
+    if (this._inspecting) this._stopInspect();
+    else this._startInspect();
+  }
+
+  private _startInspect(): void {
+    if (!this._map) return;
+    if (this._drawing) this._endDraw();
+    this._inspecting = true;
+    if (this._inspectBtn) {
+      this._inspectBtn.classList.add("active");
+      this._inspectBtn.textContent = "Inspecting — click the map";
+    }
+    this._map.getCanvas().style.cursor = "crosshair";
+    this._setStatus(
+      "Click the map to read pixel values. Click Inspect again to stop.",
+    );
+  }
+
+  private _stopInspect(): void {
+    if (!this._inspecting) return;
+    this._inspecting = false;
+    if (this._inspectBtn) {
+      this._inspectBtn.classList.remove("active");
+      this._inspectBtn.textContent = "Inspect pixel values";
+    }
+    if (this._map) this._map.getCanvas().style.cursor = "";
+  }
+
+  /**
+   * Query titiler-cmr `/point` for each selected granule at the clicked
+   * location and show the values in a map popup. Each granule is pinned by
+   * `granule_ur` so the values match exactly what Display renders.
+   */
+  private async _inspectAt(lngLat: { lng: number; lat: number }): Promise<void> {
+    const product = getProduct(this._state.product);
+    const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
+    if (!product || selected.length === 0) {
+      this._setStatus("Select a granule first, then click the map to inspect.");
+      return;
+    }
+    const band = this._bandSelect?.value || product.render.bands?.[0];
+    this._showInspectPopup(lngLat, "<em>Reading value…</em>");
+    try {
+      const conceptId =
+        selected[0].conceptId ?? (await resolveConceptId(product.shortName));
+      const results = await Promise.all(
+        selected.map(async (granule) => {
+          try {
+            const url = buildPointUrl({
+              endpoint: this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT,
+              conceptId,
+              backend: product.render.backend,
+              lon: lngLat.lng,
+              lat: lngLat.lat,
+              granuleUr: granule.id,
+              bands: band ? [band] : product.render.bands,
+              bandsRegex: product.render.bandsRegex,
+            });
+            return { granule, point: await fetchPoint(url) };
+          } catch {
+            return { granule, point: null };
+          }
+        }),
+      );
+      // The popup may have been dismissed (or inspect stopped) while awaiting.
+      if (this._inspectLngLat !== lngLat) return;
+      this._showInspectPopup(
+        lngLat,
+        this._formatInspect(lngLat, results, band),
+      );
+    } catch (err) {
+      if (this._inspectLngLat !== lngLat) return;
+      this._showInspectPopup(
+        lngLat,
+        `Inspect failed: ${escapeHtml(
+          err instanceof Error ? err.message : String(err),
+        )}`,
+      );
+    }
+  }
+
+  /** Render the per-granule point values as popup HTML. */
+  private _formatInspect(
+    lngLat: { lng: number; lat: number },
+    results: Array<{ granule: OperaGranule; point: PointResult | null }>,
+    band?: string,
+  ): string {
+    const head = `
+      <div class="opera-inspect-band">${escapeHtml(band ?? "value")}</div>
+      <div class="opera-inspect-coord">${lngLat.lng.toFixed(
+        4,
+      )}, ${lngLat.lat.toFixed(4)}</div>`;
+    const rows = results.map(({ granule, point }) => {
+      const name = escapeHtml(shorten(granule.id, 24));
+      const value =
+        point && point.assets.length > 0
+          ? formatPointValues(point)
+          : "no data";
+      return `<div class="opera-inspect-row"><span class="opera-inspect-g" title="${escapeHtml(
+        granule.id,
+      )}">${name}</span><span class="opera-inspect-v">${escapeHtml(
+        value,
+      )}</span></div>`;
+    });
+    return head + rows.join("");
+  }
+
+  private _showInspectPopup(
+    lngLat: { lng: number; lat: number },
+    html: string,
+  ): void {
+    const map = this._map;
+    const container = this._mapContainer;
+    if (!map || !container) return;
+    this._inspectLngLat = lngLat;
+    if (!this._inspectPopup) {
+      const popup = document.createElement("div");
+      popup.className = "opera-inspect-popup";
+      const close = document.createElement("button");
+      close.className = "opera-inspect-close";
+      close.type = "button";
+      close.setAttribute("aria-label", "Close");
+      close.innerHTML = "&times;";
+      close.addEventListener("click", () => this._removeInspectPopup());
+      const body = document.createElement("div");
+      body.className = "opera-inspect-body";
+      popup.append(close, body);
+      container.appendChild(popup);
+      this._inspectPopup = popup;
+      // Keep the popup pinned to its geographic point as the map pans/zooms.
+      this._inspectMoveHandler = () => this._positionInspectPopup();
+      map.on("move", this._inspectMoveHandler);
+    }
+    const body = this._inspectPopup.querySelector(".opera-inspect-body");
+    if (body) body.innerHTML = html;
+    this._positionInspectPopup();
+  }
+
+  private _positionInspectPopup(): void {
+    const map = this._map;
+    const popup = this._inspectPopup;
+    const ll = this._inspectLngLat;
+    if (!map || !popup || !ll) return;
+    const p = map.project([ll.lng, ll.lat]);
+    popup.style.left = `${p.x}px`;
+    popup.style.top = `${p.y}px`;
+  }
+
+  private _removeInspectPopup(): void {
+    if (this._inspectMoveHandler && this._map) {
+      this._map.off("move", this._inspectMoveHandler);
+      this._inspectMoveHandler = null;
+    }
+    this._inspectPopup?.remove();
+    this._inspectPopup = undefined;
+    this._inspectLngLat = undefined;
   }
 
   private _buildDownloadGroup(): HTMLElement {
@@ -1329,6 +1534,30 @@ function slug(value: string): string {
 
 function shorten(value: string, max = 28): string {
   return value.length > max ? `…${value.slice(value.length - max)}` : value;
+}
+
+/** Format a number for the inspect popup: integers as-is, floats trimmed. */
+function formatNumber(v: number): string {
+  if (Number.isInteger(v)) return String(v);
+  return parseFloat(v.toPrecision(5)).toString();
+}
+
+/**
+ * Flatten a point result's asset values into a compact label, e.g. `1` for a
+ * single-band class value or `VV=0.0123, VH=0.0047` across bands.
+ */
+function formatPointValues(point: PointResult): string {
+  const parts: string[] = [];
+  for (const asset of point.assets) {
+    asset.values.forEach((v, i) => {
+      const text = v == null ? "nodata" : formatNumber(v);
+      // Only prefix with the band name when there is more than one value, so a
+      // single-band read stays terse.
+      const single = point.assets.length === 1 && asset.values.length === 1;
+      parts.push(single ? text : `${asset.bandNames[i] ?? `b${i + 1}`}=${text}`);
+    });
+  }
+  return parts.length > 0 ? parts.join(", ") : "no data";
 }
 
 function escapeHtml(value: string): string {

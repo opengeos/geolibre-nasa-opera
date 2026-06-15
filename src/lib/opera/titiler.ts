@@ -100,6 +100,93 @@ export function tileSizeFromTemplate(template: string): number {
   return match ? parseInt(match[1], 10) : 256;
 }
 
+/** Parameters for a titiler-cmr `/point` pixel-value query. */
+export interface PointQueryParams {
+  /** Base titiler-cmr endpoint, no trailing slash. */
+  endpoint: string;
+  /** CMR collection concept-id. */
+  conceptId: string;
+  /** Reader backend; OPERA products use "rasterio". */
+  backend: TitilerBackend;
+  /** Longitude of the query point (EPSG:4326). */
+  lon: number;
+  /** Latitude of the query point (EPSG:4326). */
+  lat: number;
+  /** Pin the query to a single granule by its CMR GranuleUR (exact match). */
+  granuleUr?: string;
+  /** Temporal filter "start/end" (RFC3339) to isolate a granule or window. */
+  datetime?: string;
+  /** Band token(s) to read. */
+  bands?: string[];
+  /** Regex titiler-cmr uses to discover band assets within a granule. */
+  bandsRegex?: string;
+}
+
+/** Pixel values for one asset (granule file) at the queried point. */
+export interface PointAsset {
+  /** Source asset / granule file name. */
+  name: string;
+  /** Per-band values at the point; `null` marks nodata/outside coverage. */
+  values: (number | null)[];
+  /** Band identifiers, aligned with {@link values}. */
+  bandNames: string[];
+  /** Human-readable band descriptions, when titiler-cmr provides them. */
+  bandDescriptions?: string[];
+}
+
+/** Result of {@link fetchPoint}: the queried coordinate plus per-asset values. */
+export interface PointResult {
+  /** Queried `[lon, lat]` echoed back by titiler-cmr. */
+  coordinates: [number, number];
+  /** One entry per matching granule asset. */
+  assets: PointAsset[];
+}
+
+/**
+ * Build a titiler-cmr `/point/{lon},{lat}` request URL.
+ *
+ * Path: `{endpoint}/{backend}/point/{lon},{lat}` (lon first). Reuses the same
+ * CMR query params as the tile request (`collection_concept_id`, `granule_ur`,
+ * `temporal`, `assets`, `assets_regex`) so a click reads exactly the
+ * granule/band being displayed. Verified live against the staging endpoint.
+ */
+export function buildPointUrl(params: PointQueryParams): string {
+  const base = params.endpoint.replace(/\/+$/, "");
+  const query = new URLSearchParams();
+  query.set("collection_concept_id", params.conceptId);
+  if (params.granuleUr) query.set("granule_ur", params.granuleUr);
+  if (params.datetime) query.set("temporal", params.datetime);
+  for (const band of params.bands ?? []) query.append("assets", band);
+  if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
+  return `${base}/${params.backend}/point/${params.lon},${params.lat}?${query.toString()}`;
+}
+
+/** Fetch a point pixel-value document from titiler-cmr. */
+export async function fetchPoint(url: string): Promise<PointResult> {
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`titiler-cmr point request failed (${res.status})`);
+  }
+  const json = (await res.json()) as {
+    coordinates: [number, number];
+    assets?: Array<{
+      name: string;
+      values: (number | null)[];
+      band_names: string[];
+      band_descriptions?: string[] | null;
+    }>;
+  };
+  return {
+    coordinates: json.coordinates,
+    assets: (json.assets ?? []).map((asset) => ({
+      name: asset.name,
+      values: asset.values,
+      bandNames: asset.band_names,
+      bandDescriptions: asset.band_descriptions ?? undefined,
+    })),
+  };
+}
+
 /** Fetch a TileJSON document from titiler-cmr. */
 export async function fetchTileJson(url: string): Promise<TileJson> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
