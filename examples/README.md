@@ -1,47 +1,23 @@
-# Examples
+# Standalone example
 
-This directory contains example implementations of the MapLibre GL Plugin Template.
+`main.ts` is a standalone development harness that runs the NASA OPERA control
+on a plain MapLibre map, outside GeoLibre. It wires the GeoLibre host
+capabilities (add GeoJSON footprints, add raster tiles, fit bounds, read the map
+extent) to the local map, so search, footprint display, COG display, draw-bbox,
+and bidirectional footprint selection all work the same as inside GeoLibre.
 
-## Available Examples
-
-### Basic Example
-A simple vanilla JavaScript/TypeScript example showing how to add the plugin control to a map.
+## Run it
 
 ```bash
-# Run from project root
+npm install
 npm run dev
-# Then navigate to http://localhost:5173/examples/basic/
 ```
 
-### React Example
-A React example demonstrating the React wrapper component and hooks.
+Then open the printed URL (default http://localhost:5173). The root `index.html`
+loads `examples/main.ts`.
+
+## Build for GitHub Pages
 
 ```bash
-# Run from project root
-npm run dev
-# Then navigate to http://localhost:5173/examples/react/
+npm run build:examples   # outputs to dist-examples/
 ```
-
-## Running Examples
-
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-2. Start the development server:
-   ```bash
-   npm run dev
-   ```
-
-3. Open your browser and navigate to the example you want to view.
-
-## Building Examples
-
-To build all examples for deployment:
-
-```bash
-npm run build:examples
-```
-
-The built examples will be in the `dist-examples` directory.
