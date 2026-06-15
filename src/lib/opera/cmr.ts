@@ -98,7 +98,11 @@ export async function searchGranules(
 
 /** UMM-G item shape (only the parts we read). */
 interface UmmGranuleItem {
-  meta?: { "concept-id"?: string; "native-id"?: string };
+  meta?: {
+    "concept-id"?: string;
+    "collection-concept-id"?: string;
+    "native-id"?: string;
+  };
   umm?: {
     GranuleUR?: string;
     TemporalExtent?: {
@@ -171,7 +175,9 @@ function parseGranule(item: UmmGranuleItem): OperaGranule {
 
   return {
     id,
-    conceptId: item.meta?.["concept-id"],
+    // titiler-cmr needs the COLLECTION concept-id (C...), which CMR provides on
+    // each granule's meta; meta["concept-id"] is the granule's own id (G...).
+    conceptId: item.meta?.["collection-concept-id"],
     beginDate: range?.BeginningDateTime,
     endDate: range?.EndingDateTime,
     bbox,
@@ -232,10 +238,20 @@ export function getLayerBand(url: string): string {
   return parts[parts.length - 1] || name;
 }
 
-/** Build the selectable band list for a granule from its data links. */
+/**
+ * Build the selectable band list for a granule, de-duplicated by band token.
+ * CMR commonly lists each asset twice (an HTTPS link and an S3 link), so the
+ * raw data links would otherwise yield duplicate entries; the first (HTTPS)
+ * occurrence wins.
+ */
 export function granuleBands(granule: OperaGranule): GranuleBand[] {
-  return granule.dataLinks.map((url) => {
+  const seen = new Set<string>();
+  const bands: GranuleBand[] = [];
+  for (const url of granule.dataLinks) {
     const token = getLayerBand(url);
-    return { token, url, label: token };
-  });
+    if (seen.has(token)) continue;
+    seen.add(token);
+    bands.push({ token, url, label: token });
+  }
+  return bands;
 }
