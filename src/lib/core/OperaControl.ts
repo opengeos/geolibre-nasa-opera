@@ -40,6 +40,10 @@ export interface OperaState {
   end: string;
   /** Max granules to request. */
   count: number;
+  /** Optional rescale override "min,max"; blank uses the product/band default. */
+  rescale: string;
+  /** Optional named colormap override; blank uses the product/band default. */
+  colormapName: string;
   /** titiler-cmr endpoint. */
   endpoint: string;
 }
@@ -66,6 +70,29 @@ export interface OperaControlOptions {
 }
 
 const PANEL_CLASS = "plugin-control-panel opera-panel";
+
+/**
+ * Named titiler colormaps offered in the Rendering section. Empty string means
+ * "use the band/product default" (e.g. the DSWx categorical colormap).
+ */
+const COLORMAP_NAMES = [
+  "",
+  "viridis",
+  "terrain",
+  "gist_earth",
+  "gray",
+  "plasma",
+  "magma",
+  "inferno",
+  "cividis",
+  "blues",
+  "greens",
+  "reds",
+  "rdylgn",
+  "spectral",
+  "jet",
+  "ocean",
+];
 
 function defaultDateRange(): { start: string; end: string } {
   // Avoid Date.now() coupling in tests by reading the current date lazily here;
@@ -120,6 +147,8 @@ export class OperaControl implements IControl {
       start,
       end,
       count: 50,
+      rescale: "",
+      colormapName: "",
       endpoint: DEFAULT_TITILER_CMR_ENDPOINT,
     };
   }
@@ -273,6 +302,13 @@ export class OperaControl implements IControl {
     try {
       const conceptId =
         granule.conceptId ?? (await resolveConceptId(product.shortName));
+      const userRescale = this._state.rescale.trim();
+      const userColormap = this._state.colormapName.trim();
+      // A user-selected named colormap overrides the categorical class colormap
+      // (e.g. choosing "terrain" for a DEM band instead of the DSWx classes).
+      const categorical = userColormap
+        ? undefined
+        : colormapForBand(product.shortName, band);
       const url = buildTileJsonUrl({
         endpoint: this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT,
         conceptId,
@@ -280,11 +316,11 @@ export class OperaControl implements IControl {
         datetime: granuleDatetime(granule.beginDate, granule.endDate),
         bands: band ? [band] : product.render.bands,
         bandsRegex: product.render.bandsRegex,
-        rescale: product.render.rescale,
-        colormapName: product.render.colormapName,
+        rescale: userRescale || product.render.rescale,
+        colormapName: userColormap || product.render.colormapName,
         // Categorical layers (e.g. DSWx WTR) need an explicit colormap because
         // titiler-cmr does not apply the COG's embedded color table.
-        colormap: colormapForBand(product.shortName, band),
+        colormap: categorical,
       });
       const tilejson = await fetchTileJson(url);
       const tileUrl = tilejson.tiles[0];
@@ -415,7 +451,14 @@ export class OperaControl implements IControl {
 
     content.appendChild(this._buildResultsTable());
     content.appendChild(this._buildBandGroup());
+    content.appendChild(this._buildRenderGroup());
     content.appendChild(this._buildDisplayButton());
+
+    // Spacing between the Display action and the endpoint settings below.
+    const endpointDivider = document.createElement("div");
+    endpointDivider.className = "plugin-control-divider";
+    content.appendChild(endpointDivider);
+
     content.appendChild(this._buildEndpointGroup());
 
     panel.append(header, content);
@@ -595,6 +638,46 @@ export class OperaControl implements IControl {
       opt.selected = true;
       select.appendChild(opt);
     }
+  }
+
+  // Optional render overrides: rescale + named colormap. Blank fields fall back
+  // to the product/band defaults. Useful for continuous bands like DEM that
+  // otherwise render flat gray (e.g. rescale "0,3000" + colormap "terrain").
+  private _buildRenderGroup(): HTMLElement {
+    const wrap = document.createElement("div");
+
+    const rescaleGroup = el("div", "plugin-control-group");
+    rescaleGroup.appendChild(label("Rescale (min,max)"));
+    const rescale = document.createElement("input");
+    rescale.className = "plugin-control-input";
+    rescale.type = "text";
+    rescale.placeholder = "auto — e.g. 0,3000 for DEM";
+    rescale.value = this._state.rescale;
+    rescale.dataset.field = "rescale";
+    rescale.addEventListener("input", () => {
+      this._state.rescale = rescale.value;
+    });
+    rescaleGroup.appendChild(rescale);
+
+    const cmapGroup = el("div", "plugin-control-group");
+    cmapGroup.appendChild(label("Colormap"));
+    const cmap = document.createElement("select");
+    cmap.className = "plugin-control-input opera-select";
+    cmap.dataset.field = "colormapName";
+    for (const name of COLORMAP_NAMES) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name || "(default)";
+      if (name === this._state.colormapName) opt.selected = true;
+      cmap.appendChild(opt);
+    }
+    cmap.addEventListener("change", () => {
+      this._state.colormapName = cmap.value;
+    });
+    cmapGroup.appendChild(cmap);
+
+    wrap.append(rescaleGroup, cmapGroup);
+    return wrap;
   }
 
   private _buildDisplayButton(): HTMLElement {

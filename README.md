@@ -19,6 +19,10 @@ Earthdata authentication and Cloud-Optimized GeoTIFF reads server-side.
   table.
 - Select a granule and a band/layer, then **Display** its COG as raster tiles via
   titiler-cmr.
+- Optionally override the **rescale** (min,max) and **colormap** before
+  displaying. Categorical DSWx water layers get a built-in colormap; continuous
+  bands like `B10_DEM` render flat without a stretch, so set e.g. rescale
+  `0,3000` and colormap `terrain`.
 
 ### Supported products
 
