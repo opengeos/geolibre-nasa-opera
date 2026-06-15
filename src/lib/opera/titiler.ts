@@ -26,6 +26,12 @@ export interface TileJsonParams {
   backend: TitilerBackend;
   /** Temporal filter "start/end" (RFC3339) to isolate a granule or window. */
   datetime?: string;
+  /**
+   * Pin the result to a single granule by its CMR GranuleUR (exact match).
+   * Used to render exactly the granules the user selected, rather than every
+   * granule in a temporal window.
+   */
+  granuleUr?: string;
   /** Band token(s) to render. */
   bands?: string[];
   /** Regex titiler-cmr uses to discover band assets within a granule. */
@@ -69,6 +75,7 @@ export function buildTileJsonUrl(params: TileJsonParams): string {
   const base = params.endpoint.replace(/\/+$/, "");
   const query = new URLSearchParams();
   query.set("collection_concept_id", params.conceptId);
+  if (params.granuleUr) query.set("granule_ur", params.granuleUr);
   if (params.datetime) query.set("temporal", params.datetime);
   for (const band of params.bands ?? []) query.append("assets", band);
   if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);

@@ -418,6 +418,7 @@
 
 .opera-row {
   cursor: pointer;
+  user-select: none;
 }
 
 .opera-row:hover {
@@ -426,6 +427,27 @@
 
 .opera-row.selected {
   background: var(--pc-accent-ring);
+}
+
+/* Sortable header cells */
+.opera-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.opera-th:hover {
+  color: var(--pc-text);
+}
+
+.opera-sort-ind {
+  font-size: 9px;
+}
+
+.opera-hint {
+  font-size: 10px;
+  color: var(--pc-muted);
+  margin-bottom: 4px;
 }
 
 .opera-endpoint .plugin-control-input {
