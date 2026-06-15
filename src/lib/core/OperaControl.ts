@@ -1337,14 +1337,22 @@ export class OperaControl implements IControl {
 
   private _buildStatsPanel(): HTMLElement {
     const panel = el("div", "opera-stats");
-    // Delegate clicks on the "apply suggested rescale" button rendered into the
-    // panel's HTML, since the histogram is drawn as a string each run.
+    // Delegate clicks for the buttons rendered into the panel's HTML (the stats
+    // block is rebuilt as a string each run, so per-element listeners would not
+    // survive).
     panel.addEventListener("click", (ev) => {
-      const btn = (ev.target as HTMLElement | null)?.closest(
+      const target = ev.target as HTMLElement | null;
+      const rescaleBtn = target?.closest(
         ".opera-stats-apply-rescale",
       ) as HTMLElement | null;
-      const rescale = btn?.dataset.rescale;
-      if (rescale) this._applyRescale(rescale);
+      if (rescaleBtn?.dataset.rescale) {
+        this._applyRescale(rescaleBtn.dataset.rescale);
+        return;
+      }
+      if (target?.closest(".opera-hist-download")) {
+        const container = target.closest(".opera-hist") as HTMLElement | null;
+        if (container) this._downloadHistogram(container);
+      }
     });
     this._statsPanel = panel;
     return panel;
@@ -1355,6 +1363,34 @@ export class OperaControl implements IControl {
     this._state.rescale = value;
     if (this._rescaleInput) this._rescaleInput.value = value;
     this._setStatus(`Rescale set to ${value}. Click Display to apply it.`);
+  }
+
+  /** Export the histogram (data stashed on the container) as a standalone SVG. */
+  private _downloadHistogram(container: HTMLElement): void {
+    const raw = container.dataset.hist;
+    if (!raw) return;
+    let data: HistogramPayload;
+    try {
+      data = JSON.parse(raw) as HistogramPayload;
+    } catch {
+      this._setStatus("Could not read histogram data for export.");
+      return;
+    }
+    const svg = buildHistogramSvg(data);
+    const name = `histogram-${slug(data.band)}${
+      data.granuleId ? `-${slug(data.granuleId)}` : ""
+    }.svg`;
+    const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoke after the click is processed so the download is not interrupted.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    this._setStatus(`Downloaded ${name}.`);
   }
 
   private _clearStats(): void {
@@ -1479,7 +1515,7 @@ export class OperaControl implements IControl {
       }
       const body = isDswxWaterBand(shortName, band)
         ? renderWaterStats(bandStats)
-        : renderContinuousStats(bandStats);
+        : renderContinuousStats(bandStats, band, granule.id);
       return `<div class="opera-stats-block">${head}${body}</div>`;
     });
     const [w, s, e, n] = aoi.bbox;
@@ -1781,7 +1817,11 @@ function pixelsToKm2(pixels: number): number {
 }
 
 /** Continuous-band statistics block (min/max/mean/std/median/coverage). */
-function renderContinuousStats(s: BandStatistics): string {
+function renderContinuousStats(
+  s: BandStatistics,
+  band?: string,
+  granuleId?: string,
+): string {
   const rows: Array<[string, string]> = [
     ["min", formatStat(s.min)],
     ["max", formatStat(s.max)],
@@ -1797,15 +1837,25 @@ function renderContinuousStats(s: BandStatistics): string {
   }
   if (s.validPercent != null)
     rows.push(["valid %", `${s.validPercent.toFixed(1)}%`]);
-  return statGrid(rows) + renderHistogram(s) + renderRescaleSuggestion(s);
+  return (
+    statGrid(rows) +
+    renderHistogram(s, band, granuleId) +
+    renderRescaleSuggestion(s)
+  );
 }
 
 /**
  * A compact bar-chart of the band's value distribution over the AOI, from the
- * `/statistics` histogram (`[counts, edges]`). Bars are scaled to the tallest
- * bin; the axis shows the value range. Empty when no histogram is present.
+ * `/statistics` histogram (`[counts, edges]`). The chart area is vertically
+ * resizable (CSS), and the histogram data is stashed on the container so the
+ * Download button can export a self-contained, labeled SVG. Empty when no
+ * histogram is present.
  */
-function renderHistogram(s: BandStatistics): string {
+function renderHistogram(
+  s: BandStatistics,
+  band?: string,
+  granuleId?: string,
+): string {
   const hist = s.histogram;
   if (!hist || hist[0].length === 0) return "";
   const [counts, edges] = hist;
@@ -1821,15 +1871,84 @@ function renderHistogram(s: BandStatistics): string {
       )}"></span>`;
     })
     .join("");
+  // Stash the raw histogram + labels so the Download handler can rebuild a
+  // standalone SVG without re-querying.
+  const payload = escapeHtml(
+    JSON.stringify({ counts, edges, band: band ?? "band", granuleId }),
+  );
   return (
-    `<div class="opera-hist">` +
-    `<div class="opera-hist-bars">${bars}</div>` +
+    `<div class="opera-hist" data-hist="${payload}">` +
+    `<div class="opera-hist-bars" title="Drag the bottom-right corner to resize">${bars}</div>` +
     `<div class="opera-hist-axis"><span>${escapeHtml(
       formatStat(edges[0]),
     )}</span><span>${escapeHtml(
       formatStat(edges[edges.length - 1]),
     )}</span></div>` +
+    `<button type="button" class="opera-link-button opera-hist-download">Download SVG</button>` +
     `</div>`
+  );
+}
+
+/** Histogram payload stashed on the chart container for SVG export. */
+interface HistogramPayload {
+  counts: number[];
+  edges: number[];
+  band: string;
+  granuleId?: string;
+}
+
+/**
+ * Build a standalone, labeled SVG of a histogram for download. Self-contained
+ * (inline attributes, no external CSS or fonts beyond a generic family) so it
+ * renders on its own when opened as a file.
+ */
+function buildHistogramSvg(data: HistogramPayload): string {
+  const W = 480;
+  const H = 260;
+  const m = { t: 34, r: 14, b: 36, l: 52 };
+  const cw = W - m.l - m.r;
+  const ch = H - m.t - m.b;
+  const { counts, edges } = data;
+  const max = Math.max(...counts, 1);
+  const n = counts.length || 1;
+  const bw = cw / n;
+  const bars = counts
+    .map((c, i) => {
+      const h = (c / max) * ch;
+      const x = m.l + i * bw;
+      const y = m.t + (ch - h);
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(
+        bw - 1,
+        0.5,
+      ).toFixed(1)}" height="${h.toFixed(1)}" fill="#2b7fff"/>`;
+    })
+    .join("");
+  const baseY = m.t + ch;
+  const text = (
+    x: number,
+    y: number,
+    value: string,
+    anchor = "start",
+    size = 12,
+    weight = "normal",
+  ) =>
+    `<text x="${x}" y="${y}" font-size="${size}" font-weight="${weight}" text-anchor="${anchor}" fill="#333">${escapeHtml(
+      value,
+    )}</text>`;
+  const labels =
+    text(W / 2, 20, `${data.band} — value distribution`, "middle", 14, "600") +
+    text(m.l, H - 12, formatStat(edges[0]), "start") +
+    text(m.l + cw, H - 12, formatStat(edges[edges.length - 1]), "end") +
+    text(m.l - 6, m.t + 10, max.toLocaleString(), "end", 11) +
+    text(m.l - 6, baseY, "0", "end", 11);
+  const axis = `<line x1="${m.l}" y1="${baseY}" x2="${m.l + cw}" y2="${baseY}" stroke="#999" stroke-width="1"/>`;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="-apple-system, Segoe UI, Roboto, sans-serif">` +
+    `<rect width="${W}" height="${H}" fill="#ffffff"/>` +
+    bars +
+    axis +
+    labels +
+    `</svg>`
   );
 }
 
