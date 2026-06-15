@@ -209,6 +209,12 @@ export interface StatisticsQueryParams {
    * pixel counts per class, the basis for class areas.
    */
   categorical?: boolean;
+  /**
+   * Number of histogram bins for continuous bands (`histogram_bins`). Ignored
+   * when {@link categorical} is set. titiler-cmr defaults to 10; a higher value
+   * gives a smoother distribution for choosing a rescale.
+   */
+  histogramBins?: number;
 }
 
 /** Per-band statistics returned by titiler-cmr `/statistics`. */
@@ -229,6 +235,10 @@ export interface BandStatistics {
    * so `counts[i]` is the pixel count for class `edges[i]`.
    */
   histogram?: [number[], number[]];
+  /** 2nd-percentile value (lower bound for a suggested rescale). */
+  percentile2?: number;
+  /** 98th-percentile value (upper bound for a suggested rescale). */
+  percentile98?: number;
   /** Band description from the source asset, when available. */
   description?: string;
 }
@@ -253,7 +263,11 @@ export function buildStatisticsUrl(params: StatisticsQueryParams): string {
   if (params.datetime) query.set("temporal", params.datetime);
   for (const band of params.bands ?? []) query.append("assets", band);
   if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
-  if (params.categorical) query.set("categorical", "true");
+  if (params.categorical) {
+    query.set("categorical", "true");
+  } else if (params.histogramBins) {
+    query.set("histogram_bins", String(params.histogramBins));
+  }
   return `${base}/${params.backend}/statistics?${query.toString()}`;
 }
 
@@ -306,6 +320,8 @@ export async function fetchStatistics(
       histogram: Array.isArray(s.histogram)
         ? (s.histogram as [number[], number[]])
         : undefined,
+      percentile2: toOptNum(s.percentile_2),
+      percentile98: toOptNum(s.percentile_98),
       description:
         typeof s.description === "string" ? s.description : undefined,
     };

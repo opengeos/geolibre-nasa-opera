@@ -192,6 +192,28 @@ describe("buildStatisticsUrl", () => {
     expect(url).toContain("/rasterio/statistics?");
     expect(url).not.toContain("categorical");
   });
+
+  it("adds histogram_bins for continuous requests", () => {
+    const url = buildStatisticsUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C9-X",
+      backend: "rasterio",
+      histogramBins: 20,
+    });
+    expect(url).toContain("histogram_bins=20");
+  });
+
+  it("prefers categorical over histogram_bins", () => {
+    const url = buildStatisticsUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      conceptId: "C9-X",
+      backend: "rasterio",
+      categorical: true,
+      histogramBins: 20,
+    });
+    expect(url).toContain("categorical=true");
+    expect(url).not.toContain("histogram_bins");
+  });
 });
 
 describe("fetchStatistics", () => {
@@ -219,6 +241,8 @@ describe("fetchStatistics", () => {
                 [149265, 6396, 817, 12, 97022],
                 [0, 1, 2, 252, 253],
               ],
+              percentile_2: 0,
+              percentile_98: 253,
               description: "B01_WTR_Water classification (WTR)",
             },
           },
@@ -244,6 +268,8 @@ describe("fetchStatistics", () => {
       count: 252729.7,
       validPixels: 253512,
       validPercent: 83.39,
+      percentile2: 0,
+      percentile98: 253,
     });
     expect(b1.histogram).toEqual([
       [149265, 6396, 817, 12, 97022],
