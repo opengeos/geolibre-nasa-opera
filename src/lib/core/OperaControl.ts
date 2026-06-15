@@ -1,4 +1,9 @@
-import type { IControl, Map as MapLibreMap } from "maplibre-gl";
+import type {
+  GeoJSONSource,
+  IControl,
+  Map as MapLibreMap,
+  MapMouseEvent,
+} from "maplibre-gl";
 import type { GeoLibreNativeLayerRegistration } from "../geolibre/host-api";
 import {
   granuleBands,
@@ -71,6 +76,13 @@ export interface OperaControlOptions {
 
 const PANEL_CLASS = "plugin-control-panel opera-panel";
 
+// Self-managed map overlay for highlighting the selected footprint. These ids
+// are not touched by GeoLibre's layer-sync (which only prunes its own
+// `layer-<id>-...` prefixes), so they persist across store updates.
+const HL_SRC = "opera-hl-src";
+const HL_FILL = "opera-hl-fill";
+const HL_LINE = "opera-hl-line";
+
 /**
  * Named titiler colormaps offered in the Rendering section. Empty string means
  * "use the band/product default" (e.g. the DSWx categorical colormap).
@@ -134,6 +146,13 @@ export class OperaControl implements IControl {
   private _resizeHandler: (() => void) | null = null;
   private _mapResizeHandler: (() => void) | null = null;
 
+  // Bbox draw-on-map state.
+  private _drawing = false;
+  private _drawBtn?: HTMLButtonElement;
+  private _drawRect?: HTMLDivElement;
+  private _drawStart?: { x: number; y: number };
+  private _drawStartLngLat?: { lng: number; lat: number };
+
   constructor(options: OperaControlOptions = {}) {
     this._options = options;
     const { start, end } = defaultDateRange();
@@ -180,6 +199,12 @@ export class OperaControl implements IControl {
       this._map.off("resize", this._mapResizeHandler);
       this._mapResizeHandler = null;
     }
+    if (this._drawing) this._endDraw();
+    if (this._map) {
+      this._map.off("click", this._onMapClick);
+      this._map.off("mousemove", this._onMapMouseMove);
+    }
+    this._removeHighlightLayers();
     this._clearLayers();
     this._panel?.parentNode?.removeChild(this._panel);
     this._container?.parentNode?.removeChild(this._container);
@@ -220,6 +245,10 @@ export class OperaControl implements IControl {
 
   collapse(): void {
     if (!this._state.collapsed) this.toggle();
+  }
+
+  expand(): void {
+    if (this._state.collapsed) this.toggle();
   }
 
   // --- Layer registration ------------------------------------------------
@@ -351,12 +380,189 @@ export class OperaControl implements IControl {
     }
   }
 
-  private _selectGranule(granule: OperaGranule): void {
+  private _selectGranule(granule: OperaGranule, scrollRow = false): void {
     this._selected = granule;
     this._bands = granuleBands(granule);
     this._populateBands();
     if (this._displayBtn) this._displayBtn.disabled = this._bands.length === 0;
+    this._highlightRow(granule.id, scrollRow);
+    this._highlightFootprint(granule);
   }
+
+  /** Mark the matching table row selected (and optionally scroll it into view). */
+  private _highlightRow(granuleId: string, scroll = false): void {
+    if (!this._tableBody) return;
+    for (const node of Array.from(this._tableBody.children)) {
+      const row = node as HTMLElement;
+      const match = row.dataset.granuleId === granuleId;
+      row.classList.toggle("selected", match);
+      if (match && scroll) row.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  // --- Footprint highlight overlay (self-managed map layers) -------------
+
+  private _highlightData(features: unknown[]): Parameters<GeoJSONSource["setData"]>[0] {
+    return {
+      type: "FeatureCollection",
+      features,
+    } as Parameters<GeoJSONSource["setData"]>[0];
+  }
+
+  private _ensureHighlightLayers(): void {
+    const map = this._map;
+    if (!map) return;
+    if (!map.getSource(HL_SRC)) {
+      map.addSource(HL_SRC, { type: "geojson", data: this._highlightData([]) });
+    }
+    if (!map.getLayer(HL_FILL)) {
+      map.addLayer({
+        id: HL_FILL,
+        type: "fill",
+        source: HL_SRC,
+        paint: { "fill-color": "#ffd400", "fill-opacity": 0.12 },
+      });
+    }
+    if (!map.getLayer(HL_LINE)) {
+      map.addLayer({
+        id: HL_LINE,
+        type: "line",
+        source: HL_SRC,
+        paint: { "line-color": "#ffd400", "line-width": 3 },
+      });
+    }
+  }
+
+  private _highlightFootprint(granule: OperaGranule): void {
+    const map = this._map;
+    if (!map || !granule.geometry) return;
+    this._ensureHighlightLayers();
+    const src = map.getSource(HL_SRC) as GeoJSONSource | undefined;
+    src?.setData(
+      this._highlightData([
+        { type: "Feature", geometry: granule.geometry, properties: {} },
+      ]),
+    );
+    // Keep the highlight above later-added layers (e.g. a displayed COG).
+    if (map.getLayer(HL_FILL)) map.moveLayer(HL_FILL);
+    if (map.getLayer(HL_LINE)) map.moveLayer(HL_LINE);
+  }
+
+  private _clearHighlight(): void {
+    const src = this._map?.getSource(HL_SRC) as GeoJSONSource | undefined;
+    src?.setData(this._highlightData([]));
+  }
+
+  private _removeHighlightLayers(): void {
+    const map = this._map;
+    if (!map) return;
+    for (const id of [HL_FILL, HL_LINE]) {
+      if (map.getLayer(id)) map.removeLayer(id);
+    }
+    if (map.getSource(HL_SRC)) map.removeSource(HL_SRC);
+  }
+
+  // --- Map interaction: click-to-select + hover cursor -------------------
+
+  private _onMapClick = (e: MapMouseEvent): void => {
+    const map = this._map;
+    if (!map || this._drawing) return;
+    const hit = map
+      .queryRenderedFeatures(e.point)
+      .find((f) => f.properties && f.properties._operaGranuleId);
+    if (!hit) return;
+    const id = String(hit.properties!._operaGranuleId);
+    const granule = this._granules.find((g) => g.id === id);
+    if (!granule) return;
+    this.expand();
+    this._selectGranule(granule, true);
+  };
+
+  private _onMapMouseMove = (e: MapMouseEvent): void => {
+    const map = this._map;
+    if (!map || this._drawing) return;
+    const over = map
+      .queryRenderedFeatures(e.point)
+      .some((f) => f.properties && f.properties._operaGranuleId);
+    map.getCanvas().style.cursor = over ? "pointer" : "";
+  };
+
+  // --- Bbox draw on map -------------------------------------------------
+
+  private _toggleDraw(): void {
+    if (this._drawing) this._endDraw();
+    else this._startDraw();
+  }
+
+  private _startDraw(): void {
+    const map = this._map;
+    if (!map) return;
+    this._drawing = true;
+    if (this._drawBtn) this._drawBtn.textContent = "Cancel";
+    map.getCanvas().style.cursor = "crosshair";
+    map.dragPan.disable();
+    map.boxZoom.disable();
+    map.doubleClickZoom.disable();
+    map.on("mousedown", this._onDrawDown);
+  }
+
+  private _endDraw(): void {
+    const map = this._map;
+    this._drawing = false;
+    this._drawStart = undefined;
+    this._drawStartLngLat = undefined;
+    if (this._drawRect) {
+      this._drawRect.remove();
+      this._drawRect = undefined;
+    }
+    if (this._drawBtn) this._drawBtn.textContent = "Draw";
+    if (map) {
+      map.getCanvas().style.cursor = "";
+      map.off("mousedown", this._onDrawDown);
+      map.off("mousemove", this._onDrawMove);
+      map.dragPan.enable();
+      map.boxZoom.enable();
+      map.doubleClickZoom.enable();
+    }
+  }
+
+  private _onDrawDown = (e: MapMouseEvent): void => {
+    const map = this._map;
+    if (!map || !this._mapContainer) return;
+    e.preventDefault();
+    this._drawStart = { x: e.point.x, y: e.point.y };
+    this._drawStartLngLat = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+    const rect = document.createElement("div");
+    rect.className = "opera-draw-rect";
+    this._mapContainer.appendChild(rect);
+    this._drawRect = rect;
+    map.on("mousemove", this._onDrawMove);
+    map.once("mouseup", this._onDrawUp);
+  };
+
+  private _onDrawMove = (e: MapMouseEvent): void => {
+    if (!this._drawRect || !this._drawStart) return;
+    const { x: x1, y: y1 } = this._drawStart;
+    const x2 = e.point.x;
+    const y2 = e.point.y;
+    this._drawRect.style.left = `${Math.min(x1, x2)}px`;
+    this._drawRect.style.top = `${Math.min(y1, y2)}px`;
+    this._drawRect.style.width = `${Math.abs(x2 - x1)}px`;
+    this._drawRect.style.height = `${Math.abs(y2 - y1)}px`;
+  };
+
+  private _onDrawUp = (e: MapMouseEvent): void => {
+    const start = this._drawStartLngLat;
+    if (start) {
+      const end = e.lngLat;
+      this._state.west = Math.min(start.lng, end.lng).toFixed(4);
+      this._state.east = Math.max(start.lng, end.lng).toFixed(4);
+      this._state.south = Math.min(start.lat, end.lat).toFixed(4);
+      this._state.north = Math.max(start.lat, end.lat).toFixed(4);
+      this._syncForm();
+    }
+    this._endDraw();
+  };
 
   // --- BBox helpers ------------------------------------------------------
 
@@ -490,12 +696,25 @@ export class OperaControl implements IControl {
     const row = document.createElement("div");
     row.className = "opera-label-row";
     row.appendChild(label("Bounding box (W, S, E, N)"));
+
+    const actions = document.createElement("span");
+    actions.className = "opera-bbox-actions";
+
     const extentBtn = document.createElement("button");
     extentBtn.type = "button";
     extentBtn.className = "opera-link-button";
     extentBtn.textContent = "Use map extent";
     extentBtn.addEventListener("click", () => this._useMapExtent());
-    row.appendChild(extentBtn);
+
+    const drawBtn = document.createElement("button");
+    drawBtn.type = "button";
+    drawBtn.className = "opera-link-button";
+    drawBtn.textContent = "Draw";
+    drawBtn.addEventListener("click", () => this._toggleDraw());
+    this._drawBtn = drawBtn;
+
+    actions.append(extentBtn, drawBtn);
+    row.appendChild(actions);
     group.appendChild(row);
 
     const grid = document.createElement("div");
@@ -587,22 +806,18 @@ export class OperaControl implements IControl {
     this._bands = [];
     this._populateBands();
     if (this._displayBtn) this._displayBtn.disabled = true;
+    this._clearHighlight();
 
     for (const granule of this._granules) {
       const tr = document.createElement("tr");
       tr.className = "opera-row";
+      tr.dataset.granuleId = granule.id;
       const begin = granule.beginDate?.slice(0, 10) ?? "";
       tr.innerHTML = `
         <td title="${escapeHtml(granule.id)}">${escapeHtml(shorten(granule.id))}</td>
         <td>${escapeHtml(begin)}</td>
         <td>${granule.dataLinks.length}</td>`;
-      tr.addEventListener("click", () => {
-        this._tableBody
-          ?.querySelectorAll(".opera-row.selected")
-          .forEach((row) => row.classList.remove("selected"));
-        tr.classList.add("selected");
-        this._selectGranule(granule);
-      });
+      tr.addEventListener("click", () => this._selectGranule(granule));
       this._tableBody.appendChild(tr);
     }
   }
@@ -765,6 +980,11 @@ export class OperaControl implements IControl {
   // --- Positioning (adapted from the template's PluginControl) -----------
 
   private _setupEventListeners(): void {
+    // Bidirectional footprint selection: clicking a footprint on the map selects
+    // its row; a pointer cursor signals it is clickable.
+    this._map?.on("click", this._onMapClick);
+    this._map?.on("mousemove", this._onMapMouseMove);
+
     // The panel stays open until the user clicks the toggle button or the X
     // close button; it does not collapse on click-outside.
     this._resizeHandler = () => {

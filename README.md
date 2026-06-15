@@ -13,10 +13,12 @@ Earthdata authentication and Cloud-Optimized GeoTIFF reads server-side.
 
 ## What it does
 
-- Pick an OPERA product, set a bounding box (or use the current map extent) and a
-  date range, and **search** NASA CMR for matching granules.
+- Pick an OPERA product, set a bounding box (type it, **Use map extent**, or
+  **Draw** a box on the map) and a date range, and **search** NASA CMR for
+  matching granules.
 - Granule **footprints** are drawn as a GeoJSON layer and listed in a results
-  table.
+  table. Selection is **bidirectional**: clicking a table row highlights its
+  footprint on the map, and clicking a footprint on the map selects its row.
 - Select a granule and a band/layer, then **Display** its COG as raster tiles via
   titiler-cmr.
 - Optionally override the **rescale** (min,max) and **colormap** before

@@ -82,6 +82,9 @@ export async function searchGranules(
       type: "Feature" as const,
       geometry: g.geometry,
       properties: {
+        // Distinctive key so map clicks can identify an OPERA footprint via
+        // queryRenderedFeatures without depending on the host's layer id.
+        _operaGranuleId: g.id,
         id: g.id,
         beginDate: g.beginDate ?? "",
         endDate: g.endDate ?? "",

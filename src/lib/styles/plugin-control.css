@@ -351,6 +351,20 @@
   text-decoration: underline;
 }
 
+.opera-bbox-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* Rubber-band rectangle drawn over the map while picking a bbox. */
+.opera-draw-rect {
+  position: absolute;
+  border: 2px dashed var(--pc-accent);
+  background: var(--pc-accent-ring);
+  pointer-events: none;
+  z-index: 500;
+}
+
 .opera-bbox-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
