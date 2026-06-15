@@ -1350,14 +1350,18 @@ export class OperaControl implements IControl {
   }
 
   /**
-   * Build a GeoJSON Polygon Feature from the current AOI (bbox field, or the map
-   * extent when blank). Returned as the POST body for `/statistics`.
+   * Build a GeoJSON Polygon Feature for the current AOI (the bbox field, or the
+   * map extent when the field is blank) plus the bbox itself and whether it came
+   * from the map extent, so the panel can show what area was actually summarized.
    */
-  private _aoiFeature(): unknown | undefined {
-    const bbox = this._currentBBox();
+  private _aoiFeature():
+    | { feature: unknown; bbox: BBox; fromMapExtent: boolean }
+    | undefined {
+    const typed = this._parseBBox(this._state.bbox);
+    const bbox = typed ?? this._options.getMapBounds?.() ?? undefined;
     if (!bbox) return undefined;
     const [w, s, e, n] = bbox;
-    return {
+    const feature = {
       type: "Feature",
       properties: {},
       geometry: {
@@ -1373,6 +1377,7 @@ export class OperaControl implements IControl {
         ],
       },
     };
+    return { feature, bbox, fromMapExtent: !typed };
   }
 
   /**
@@ -1416,13 +1421,13 @@ export class OperaControl implements IControl {
               bandsRegex: product.render.bandsRegex,
               categorical,
             });
-            return { granule, stats: await fetchStatistics(url, aoi) };
+            return { granule, stats: await fetchStatistics(url, aoi.feature) };
           } catch {
             return { granule, stats: null };
           }
         }),
       );
-      this._renderStats(results, product.shortName, band);
+      this._renderStats(results, product.shortName, band, aoi);
       const ok = results.filter((r) => r.stats).length;
       this._setStatus(
         ok === selected.length
@@ -1442,7 +1447,8 @@ export class OperaControl implements IControl {
   private _renderStats(
     results: Array<{ granule: OperaGranule; stats: StatisticsResult | null }>,
     shortName: string,
-    band?: string,
+    band: string | undefined,
+    aoi: { bbox: BBox; fromMapExtent: boolean },
   ): void {
     const blocks = results.map(({ granule, stats }) => {
       const head = `<div class="opera-stats-granule" title="${escapeHtml(
@@ -1457,9 +1463,15 @@ export class OperaControl implements IControl {
         : renderContinuousStats(bandStats);
       return `<div class="opera-stats-block">${head}${body}</div>`;
     });
-    const header = `<div class="opera-stats-title">${escapeHtml(
-      band ?? "band",
-    )} — AOI statistics</div>`;
+    const [w, s, e, n] = aoi.bbox;
+    const extentNote = aoi.fromMapExtent ? " · map extent" : "";
+    const header =
+      `<div class="opera-stats-title">${escapeHtml(
+        band ?? "band",
+      )} — AOI statistics</div>` +
+      `<div class="opera-stats-aoi">AOI ${w.toFixed(2)}, ${s.toFixed(
+        2,
+      )}, ${e.toFixed(2)}, ${n.toFixed(2)}${extentNote}</div>`;
     this._setStatsContent(header + blocks.join(""));
   }
 
@@ -1744,6 +1756,11 @@ function statGrid(rows: Array<[string, string]>): string {
   return `<div class="opera-stats-grid">${cells}</div>`;
 }
 
+/** Pixels -> area in km² at the OPERA native grid spacing. */
+function pixelsToKm2(pixels: number): number {
+  return (pixels * OPERA_PIXEL_SIZE_METERS * OPERA_PIXEL_SIZE_METERS) / 1e6;
+}
+
 /** Continuous-band statistics block (min/max/mean/std/median/coverage). */
 function renderContinuousStats(s: BandStatistics): string {
   const rows: Array<[string, string]> = [
@@ -1753,12 +1770,12 @@ function renderContinuousStats(s: BandStatistics): string {
     ["std", formatStat(s.std)],
   ];
   if (s.median != null) rows.push(["median", formatStat(s.median)]);
-  rows.push([
-    "valid px",
-    s.validPixels != null
-      ? Math.round(s.validPixels).toLocaleString()
-      : formatStat(s.count),
-  ]);
+  if (s.validPixels != null) {
+    rows.push(["valid px", Math.round(s.validPixels).toLocaleString()]);
+    rows.push(["valid area", `${formatArea(pixelsToKm2(s.validPixels))} km²`]);
+  } else {
+    rows.push(["count", formatStat(s.count)]);
+  }
   if (s.validPercent != null)
     rows.push(["valid %", `${s.validPercent.toFixed(1)}%`]);
   return statGrid(rows);
@@ -1766,10 +1783,11 @@ function renderContinuousStats(s: BandStatistics): string {
 
 /**
  * DSWx water-band block: derive open-water area from the categorical histogram
- * (class pixel counts x pixel area) and list every class count.
+ * (class pixel counts x pixel area) and list every class count. Areas are a
+ * fraction of the total valid area, which is shown so the magnitude is
+ * interpretable (e.g. a whole-granule AOI yields thousands of km²).
  */
 function renderWaterStats(s: BandStatistics): string {
-  const pixelArea = OPERA_PIXEL_SIZE_METERS * OPERA_PIXEL_SIZE_METERS; // m²
   let openCount = 0;
   let partialCount = 0;
   let validCount = 0;
@@ -1789,18 +1807,25 @@ function renderWaterStats(s: BandStatistics): string {
       );
     });
   }
-  const openKm2 = (openCount * pixelArea) / 1e6;
-  const waterKm2 = ((openCount + partialCount) * pixelArea) / 1e6;
-  const openPct =
-    validCount > 0 ? ` · ${((openCount / validCount) * 100).toFixed(1)}% of valid` : "";
-  const headline = `
-    <div class="opera-stats-headline">Open water: <b>${formatArea(
-      openKm2,
-    )} km²</b></div>
-    <div class="opera-stats-sub">Open + partial: ${formatArea(
-      waterKm2,
-    )} km²${openPct}</div>`;
-  return `${headline}<div class="opera-stats-classes">${classRows.join("")}</div>`;
+  // Percentages are of valid (non-fill) pixels; keep each one on the line it
+  // describes so the open-water fraction is never mistaken for open+partial.
+  const pct = (px: number) =>
+    validCount > 0 ? ` (${((px / validCount) * 100).toFixed(1)}% of valid)` : "";
+  const openLine = `Open water: <b>${formatArea(
+    pixelsToKm2(openCount),
+  )} km²</b>${pct(openCount)}`;
+  const waterLine = `Open + partial: ${formatArea(
+    pixelsToKm2(openCount + partialCount),
+  )} km²${pct(openCount + partialCount)}`;
+  const validLine = `Valid: ${formatArea(
+    pixelsToKm2(validCount),
+  )} km² · ${validCount.toLocaleString()} px`;
+  return (
+    `<div class="opera-stats-headline">${openLine}</div>` +
+    `<div class="opera-stats-sub">${waterLine}</div>` +
+    `<div class="opera-stats-sub">${validLine}</div>` +
+    `<div class="opera-stats-classes">${classRows.join("")}</div>`
+  );
 }
 
 /**

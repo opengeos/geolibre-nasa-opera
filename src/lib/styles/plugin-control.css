@@ -586,6 +586,12 @@
 .opera-stats-title {
   font-weight: 600;
   color: var(--pc-label);
+}
+
+.opera-stats-aoi {
+  font-size: 10px;
+  color: var(--pc-muted);
+  font-variant-numeric: tabular-nums;
   margin-bottom: 4px;
 }
 
