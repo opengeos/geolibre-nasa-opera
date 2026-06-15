@@ -16,8 +16,6 @@ import {
   buildTileJsonUrl,
   DEFAULT_TITILER_CMR_ENDPOINT,
   fetchTileJson,
-  granuleDatetime,
-  tileJsonBounds,
   tileSizeFromTemplate,
 } from "../opera/titiler";
 import type {
@@ -139,7 +137,15 @@ export class OperaControl implements IControl {
   private _state: OperaState;
 
   private _granules: OperaGranule[] = [];
-  private _selected: OperaGranule | null = null;
+  // Current displayed (sorted) order of the results table.
+  private _view: OperaGranule[] = [];
+  // Multi-selection: ids of selected granules, the last-clicked "active"
+  // granule (drives the band list), and the shift-range anchor.
+  private _selectedIds = new Set<string>();
+  private _activeGranule: OperaGranule | null = null;
+  private _anchorId: string | null = null;
+  private _sortKey: "id" | "begin" | "links" | null = null;
+  private _sortDir: 1 | -1 = 1;
   private _bands: GranuleBand[] = [];
   private _registeredLayerIds: string[] = [];
 
@@ -319,60 +325,84 @@ export class OperaControl implements IControl {
   }
 
   private async _onDisplay(): Promise<void> {
-    const granule = this._selected;
     const product = getProduct(this._state.product);
-    if (!granule || !product) {
+    const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
+    if (!product || selected.length === 0) {
       this._setStatus("Select a granule first.");
       return;
     }
     const band = this._bandSelect?.value || product.render.bands?.[0];
-    this._setStatus("Requesting tiles from titiler-cmr…");
+    const userRescale = this._state.rescale.trim();
+    const userColormap = this._state.colormapName.trim();
+    // A user-selected named colormap overrides the categorical class colormap
+    // (e.g. choosing "terrain" for a DEM band instead of the DSWx classes).
+    const categorical = userColormap
+      ? undefined
+      : colormapForBand(product.shortName, band);
+
+    this._setStatus(
+      `Requesting ${selected.length} granule(s) from titiler-cmr…`,
+    );
     try {
       const conceptId =
-        granule.conceptId ?? (await resolveConceptId(product.shortName));
-      const userRescale = this._state.rescale.trim();
-      const userColormap = this._state.colormapName.trim();
-      // A user-selected named colormap overrides the categorical class colormap
-      // (e.g. choosing "terrain" for a DEM band instead of the DSWx classes).
-      const categorical = userColormap
-        ? undefined
-        : colormapForBand(product.shortName, band);
-      const url = buildTileJsonUrl({
-        endpoint: this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT,
-        conceptId,
-        backend: product.render.backend,
-        datetime: granuleDatetime(granule.beginDate, granule.endDate),
-        bands: band ? [band] : product.render.bands,
-        bandsRegex: product.render.bandsRegex,
-        rescale: userRescale || product.render.rescale,
-        colormapName: userColormap || product.render.colormapName,
-        // Categorical layers (e.g. DSWx WTR) need an explicit colormap because
-        // titiler-cmr does not apply the COG's embedded color table.
-        colormap: categorical,
-      });
-      const tilejson = await fetchTileJson(url);
-      const tileUrl = tilejson.tiles[0];
+        selected[0].conceptId ?? (await resolveConceptId(product.shortName));
+      let ok = 0;
+      // Render each selected granule as its own granule_ur-pinned layer so the
+      // result is exactly the chosen granules (titiler-cmr has no granule-list
+      // param; a temporal window would also pull in unselected granules).
+      await Promise.all(
+        selected.map(async (granule) => {
+          const url = buildTileJsonUrl({
+            endpoint: this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT,
+            conceptId,
+            backend: product.render.backend,
+            granuleUr: granule.id,
+            bands: band ? [band] : product.render.bands,
+            bandsRegex: product.render.bandsRegex,
+            rescale: userRescale || product.render.rescale,
+            colormapName: userColormap || product.render.colormapName,
+            colormap: categorical,
+          });
+          try {
+            const tilejson = await fetchTileJson(url);
+            const tileUrl = tilejson.tiles[0];
+            const layerId = `opera-cog-${slug(granule.id)}-${slug(band ?? "band")}`;
+            this._registerLayer({
+              id: layerId,
+              name: `OPERA ${product.shortTitle} ${band ?? ""} — ${granule.id}`.trim(),
+              type: "raster",
+              source: {
+                type: "raster",
+                tiles: [tileUrl],
+                tileSize: tileSizeFromTemplate(tileUrl),
+                ...(tilejson.minzoom != null
+                  ? { minzoom: tilejson.minzoom }
+                  : {}),
+                ...(tilejson.maxzoom != null
+                  ? { maxzoom: tilejson.maxzoom }
+                  : {}),
+              },
+              nativeLayerIds: [],
+              opacity: 1,
+              metadata: {
+                sourceKind: "opera-titiler-cmr",
+                granuleId: granule.id,
+              },
+            });
+            ok++;
+          } catch {
+            // Skip a granule that fails; report the partial count below.
+          }
+        }),
+      );
 
-      const layerId = `opera-cog-${slug(granule.id)}-${slug(band ?? "band")}`;
-      this._registerLayer({
-        id: layerId,
-        name: `OPERA ${product.shortTitle} ${band ?? ""} — ${granule.id}`.trim(),
-        type: "raster",
-        source: {
-          type: "raster",
-          tiles: [tileUrl],
-          tileSize: tileSizeFromTemplate(tileUrl),
-          ...(tilejson.minzoom != null ? { minzoom: tilejson.minzoom } : {}),
-          ...(tilejson.maxzoom != null ? { maxzoom: tilejson.maxzoom } : {}),
-        },
-        nativeLayerIds: [],
-        opacity: 1,
-        metadata: { sourceKind: "opera-titiler-cmr", granuleId: granule.id },
-      });
-
-      const bounds = granule.bbox ?? tileJsonBounds(tilejson);
+      const bounds = this._combinedBounds(selected);
       if (bounds) this._options.fitBounds?.(bounds);
-      this._setStatus(`Displayed ${granule.id}.`);
+      this._setStatus(
+        ok === selected.length
+          ? `Displayed ${ok} granule(s).`
+          : `Displayed ${ok}/${selected.length} granule(s).`,
+      );
     } catch (err) {
       this._setStatus(
         `Display failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -380,24 +410,73 @@ export class OperaControl implements IControl {
     }
   }
 
-  private _selectGranule(granule: OperaGranule, scrollRow = false): void {
-    this._selected = granule;
-    this._bands = granuleBands(granule);
-    this._populateBands();
-    if (this._displayBtn) this._displayBtn.disabled = this._bands.length === 0;
-    this._highlightRow(granule.id, scrollRow);
-    this._highlightFootprint(granule);
+  /**
+   * Update the selection from a row/footprint click, honoring modifier keys:
+   * Ctrl/Cmd toggles, Shift selects a contiguous range from the anchor, plain
+   * click selects just that granule.
+   */
+  private _applySelection(
+    granule: OperaGranule,
+    opts: { toggle?: boolean; range?: boolean; scroll?: boolean } = {},
+  ): void {
+    const id = granule.id;
+    if (opts.range && this._anchorId) {
+      const order = this._view.map((g) => g.id);
+      const a = order.indexOf(this._anchorId);
+      const b = order.indexOf(id);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a <= b ? [a, b] : [b, a];
+        this._selectedIds = new Set(order.slice(lo, hi + 1));
+      } else {
+        this._selectedIds = new Set([id]);
+        this._anchorId = id;
+      }
+    } else if (opts.toggle) {
+      if (this._selectedIds.has(id)) this._selectedIds.delete(id);
+      else this._selectedIds.add(id);
+      this._anchorId = id;
+    } else {
+      this._selectedIds = new Set([id]);
+      this._anchorId = id;
+    }
+    this._activeGranule = granule;
+    this._refreshSelectionUI(opts.scroll ? id : undefined);
   }
 
-  /** Mark the matching table row selected (and optionally scroll it into view). */
-  private _highlightRow(granuleId: string, scroll = false): void {
-    if (!this._tableBody) return;
-    for (const node of Array.from(this._tableBody.children)) {
-      const row = node as HTMLElement;
-      const match = row.dataset.granuleId === granuleId;
-      row.classList.toggle("selected", match);
-      if (match && scroll) row.scrollIntoView({ block: "nearest" });
+  /** Sync row highlight, band list, Display button, and footprint highlight. */
+  private _refreshSelectionUI(scrollToId?: string): void {
+    if (this._tableBody) {
+      for (const node of Array.from(this._tableBody.children)) {
+        const row = node as HTMLElement;
+        const id = row.dataset.granuleId ?? "";
+        row.classList.toggle("selected", this._selectedIds.has(id));
+        if (scrollToId && id === scrollToId) {
+          row.scrollIntoView({ block: "nearest" });
+        }
+      }
     }
+    this._bands = this._activeGranule ? granuleBands(this._activeGranule) : [];
+    this._populateBands();
+    if (this._displayBtn) {
+      this._displayBtn.disabled =
+        this._selectedIds.size === 0 || this._bands.length === 0;
+    }
+    this._highlightSelectedFootprints();
+  }
+
+  /** Union of the given granules' bounding boxes. */
+  private _combinedBounds(granules: OperaGranule[]): BBox | undefined {
+    const boxes = granules.map((g) => g.bbox).filter((b): b is BBox => !!b);
+    if (boxes.length === 0) return undefined;
+    return boxes.reduce<BBox>(
+      (acc, b) => [
+        Math.min(acc[0], b[0]),
+        Math.min(acc[1], b[1]),
+        Math.max(acc[2], b[2]),
+        Math.max(acc[3], b[3]),
+      ],
+      [Infinity, Infinity, -Infinity, -Infinity],
+    );
   }
 
   // --- Footprint highlight overlay (self-managed map layers) -------------
@@ -433,16 +512,19 @@ export class OperaControl implements IControl {
     }
   }
 
-  private _highlightFootprint(granule: OperaGranule): void {
+  private _highlightSelectedFootprints(): void {
     const map = this._map;
-    if (!map || !granule.geometry) return;
+    if (!map) return;
     this._ensureHighlightLayers();
+    const features = this._granules
+      .filter((g) => this._selectedIds.has(g.id) && g.geometry)
+      .map((g) => ({
+        type: "Feature",
+        geometry: g.geometry,
+        properties: {},
+      }));
     const src = map.getSource(HL_SRC) as GeoJSONSource | undefined;
-    src?.setData(
-      this._highlightData([
-        { type: "Feature", geometry: granule.geometry, properties: {} },
-      ]),
-    );
+    src?.setData(this._highlightData(features));
     // Keep the highlight above later-added layers (e.g. a displayed COG).
     if (map.getLayer(HL_FILL)) map.moveLayer(HL_FILL);
     if (map.getLayer(HL_LINE)) map.moveLayer(HL_LINE);
@@ -474,8 +556,13 @@ export class OperaControl implements IControl {
     const id = String(hit.properties!._operaGranuleId);
     const granule = this._granules.find((g) => g.id === id);
     if (!granule) return;
+    const oe = e.originalEvent as MouseEvent | undefined;
     this.expand();
-    this._selectGranule(granule, true);
+    this._applySelection(granule, {
+      toggle: !!oe && (oe.ctrlKey || oe.metaKey),
+      range: !!oe && oe.shiftKey,
+      scroll: true,
+    });
   };
 
   private _onMapMouseMove = (e: MapMouseEvent): void => {
@@ -784,42 +871,117 @@ export class OperaControl implements IControl {
   }
 
   private _buildResultsTable(): HTMLElement {
+    const container = document.createElement("div");
+
+    const hint = el("div", "opera-hint");
+    hint.textContent =
+      "Click a header to sort. Ctrl/Cmd or Shift-click rows to select multiple.";
+    container.appendChild(hint);
+
     const wrap = document.createElement("div");
     wrap.className = "opera-results";
     const table = document.createElement("table");
     table.className = "opera-table";
-    table.innerHTML = `
-      <thead>
-        <tr><th>Granule</th><th>Begin</th><th>Links</th></tr>
-      </thead>`;
+
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    const columns: Array<[OperaControl["_sortKey"] & string, string]> = [
+      ["id", "Granule"],
+      ["begin", "Begin"],
+      ["links", "Links"],
+    ];
+    for (const [key, text] of columns) {
+      const th = document.createElement("th");
+      th.className = "opera-th";
+      th.dataset.sort = key;
+      th.innerHTML = `${text}<span class="opera-sort-ind"></span>`;
+      th.addEventListener("click", () => this._onSortClick(key));
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
     const body = document.createElement("tbody");
     this._tableBody = body;
     table.appendChild(body);
     wrap.appendChild(table);
-    return wrap;
+    container.appendChild(wrap);
+    return container;
   }
 
   private _renderResults(): void {
-    if (!this._tableBody) return;
-    this._tableBody.innerHTML = "";
-    this._selected = null;
+    this._view = [...this._granules];
+    this._selectedIds.clear();
+    this._anchorId = null;
+    this._activeGranule = null;
     this._bands = [];
     this._populateBands();
     if (this._displayBtn) this._displayBtn.disabled = true;
     this._clearHighlight();
+    this._renderRows();
+  }
 
-    for (const granule of this._granules) {
+  /** (Re)build the table body from the current view + sort, keeping selection. */
+  private _renderRows(): void {
+    if (!this._tableBody) return;
+    this._sortView();
+    this._tableBody.innerHTML = "";
+    for (const granule of this._view) {
       const tr = document.createElement("tr");
       tr.className = "opera-row";
       tr.dataset.granuleId = granule.id;
+      if (this._selectedIds.has(granule.id)) tr.classList.add("selected");
       const begin = granule.beginDate?.slice(0, 10) ?? "";
       tr.innerHTML = `
         <td title="${escapeHtml(granule.id)}">${escapeHtml(shorten(granule.id))}</td>
         <td>${escapeHtml(begin)}</td>
         <td>${granule.dataLinks.length}</td>`;
-      tr.addEventListener("click", () => this._selectGranule(granule));
+      tr.addEventListener("click", (ev) =>
+        this._applySelection(granule, {
+          toggle: ev.ctrlKey || ev.metaKey,
+          range: ev.shiftKey,
+        }),
+      );
       this._tableBody.appendChild(tr);
     }
+    this._updateSortIndicators();
+  }
+
+  private _onSortClick(key: "id" | "begin" | "links"): void {
+    if (this._sortKey === key) {
+      this._sortDir = this._sortDir === 1 ? -1 : 1;
+    } else {
+      this._sortKey = key;
+      this._sortDir = 1;
+    }
+    this._renderRows();
+  }
+
+  private _sortView(): void {
+    const key = this._sortKey;
+    if (!key) return;
+    const dir = this._sortDir;
+    this._view.sort((a, b) => {
+      if (key === "links") return (a.dataLinks.length - b.dataLinks.length) * dir;
+      const av = key === "begin" ? (a.beginDate ?? "") : a.id;
+      const bv = key === "begin" ? (b.beginDate ?? "") : b.id;
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
+  }
+
+  private _updateSortIndicators(): void {
+    const head = this._tableBody?.parentElement?.querySelector("thead");
+    if (!head) return;
+    head.querySelectorAll<HTMLElement>(".opera-th").forEach((th) => {
+      const ind = th.querySelector(".opera-sort-ind");
+      if (!ind) return;
+      ind.textContent =
+        th.dataset.sort === this._sortKey
+          ? this._sortDir === 1
+            ? " ▲"
+            : " ▼"
+          : "";
+    });
   }
 
   private _buildBandGroup(): HTMLElement {

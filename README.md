@@ -16,11 +16,14 @@ Earthdata authentication and Cloud-Optimized GeoTIFF reads server-side.
 - Pick an OPERA product, set a bounding box (type it, **Use map extent**, or
   **Draw** a box on the map) and a date range, and **search** NASA CMR for
   matching granules.
-- Granule **footprints** are drawn as a GeoJSON layer and listed in a results
-  table. Selection is **bidirectional**: clicking a table row highlights its
-  footprint on the map, and clicking a footprint on the map selects its row.
-- Select a granule and a band/layer, then **Display** its COG as raster tiles via
-  titiler-cmr.
+- Granule **footprints** are drawn as a GeoJSON layer and listed in a sortable
+  results table (click a header to sort by granule, date, or link count).
+  Selection is **bidirectional**: clicking a table row highlights its footprint
+  on the map, and clicking a footprint on the map selects its row.
+- **Select one or many** granules (Ctrl/Cmd-click to toggle, Shift-click for a
+  range), pick a band/layer, then **Display**. Each selected granule renders as
+  its own titiler-cmr layer (pinned by granule_ur), so exactly the chosen
+  granules are shown together.
 - Optionally override the **rescale** (min,max) and **colormap** before
   displaying. Categorical DSWx water layers get a built-in colormap; continuous
   bands like `B10_DEM` render flat without a stretch, so set e.g. rescale
