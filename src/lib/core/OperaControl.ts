@@ -1859,13 +1859,18 @@ function renderHistogram(
   const hist = s.histogram;
   if (!hist || hist[0].length === 0) return "";
   const [counts, edges] = hist;
+  // Binned histograms carry one more edge than counts (bin boundaries);
+  // categorical histograms (e.g. DIST status) carry one edge per count (the
+  // class value). Label each bar by its range or its single class accordingly.
+  const categorical = edges.length === counts.length;
   const max = Math.max(...counts, 1);
   const bars = counts
     .map((c, i) => {
-      const lo = edges[i];
-      const hi = edges[i + 1];
+      const label = categorical
+        ? formatStat(edges[i])
+        : `${formatStat(edges[i])}–${formatStat(edges[i + 1])}`;
       const height = Math.max(Math.round((c / max) * 100), c > 0 ? 2 : 0);
-      const title = `${formatStat(lo)}–${formatStat(hi)}: ${c.toLocaleString()}`;
+      const title = `${label}: ${c.toLocaleString()}`;
       return `<span class="opera-hist-bar" style="height:${height}%" title="${escapeHtml(
         title,
       )}"></span>`;
