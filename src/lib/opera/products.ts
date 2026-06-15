@@ -111,6 +111,13 @@ export function getProduct(shortName: string): OperaProduct | undefined {
   return OPERA_PRODUCTS.find((p) => p.shortName === shortName);
 }
 
+/**
+ * Native pixel size in meters, used to convert class pixel counts to areas.
+ * Every raster OPERA product handled by this plugin is on a 30 m grid; titiler
+ * runs `/statistics` in the granule's native CRS, so pixel counts are 30 m.
+ */
+export const OPERA_PIXEL_SIZE_METERS = 30;
+
 /** Suggested rescale + colormap for a given band, shown in the Rendering UI. */
 export interface BandRender {
   /** Rescale "min,max"; blank means none. */
