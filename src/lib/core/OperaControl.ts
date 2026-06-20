@@ -773,12 +773,17 @@ export class OperaControl implements IControl {
     toggleBtn.className = "plugin-control-toggle";
     toggleBtn.type = "button";
     toggleBtn.setAttribute("aria-label", this._options.title ?? "NASA OPERA");
+    // Satellite glyph: signals NASA OPERA's satellite-derived products and
+    // avoids reusing the globe, which already denotes GeoLibre's core map
+    // projection and caused visual confusion (see geolibre issue #631).
     toggleBtn.innerHTML = `
       <span class="plugin-control-icon">
         <svg viewBox="0 0 24 24" width="22" height="22" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="9"/>
-          <path d="M3 12h18"/>
-          <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>
+          <path d="M13 7 9 3 5 7l4 4"/>
+          <path d="m17 11 4 4-4 4-4-4"/>
+          <path d="m8 12 4 4 6-6-4-4Z"/>
+          <path d="m16 8 3-3"/>
+          <path d="M9 21a6 6 0 0 0-6-6"/>
         </svg>
       </span>`;
     toggleBtn.addEventListener("click", () => this.toggle());
@@ -1865,30 +1870,50 @@ export class OperaControl implements IControl {
     const buttonLeft = buttonRect.left - mapRect.left;
     const buttonRight = mapRect.right - buttonRect.right;
     const gap = 5;
+    // Keep a small breathing space from the map edges, and never shrink the
+    // panel below a usable height even on a very short map.
+    const margin = 8;
+    const minPanelHeight = 200;
 
     this._panel.style.top = "";
     this._panel.style.bottom = "";
     this._panel.style.left = "";
     this._panel.style.right = "";
 
+    // Vertical space available to the panel inside the map container. The map
+    // container's bottom edge sits at the top of any auxiliary UI below the map
+    // (the coordinate/status bar), so clamping the panel's max-height to this
+    // budget keeps the whole panel, including its bottom controls and the
+    // resize grip, above that bar instead of rendering underneath it
+    // (geolibre issue #631).
+    let available: number;
+
     switch (position) {
       case "top-left":
         this._panel.style.top = `${buttonTop + buttonRect.height + gap}px`;
         this._panel.style.left = `${buttonLeft}px`;
+        available = mapRect.height - (buttonTop + buttonRect.height + gap);
         break;
       case "top-right":
         this._panel.style.top = `${buttonTop + buttonRect.height + gap}px`;
         this._panel.style.right = `${buttonRight}px`;
+        available = mapRect.height - (buttonTop + buttonRect.height + gap);
         break;
       case "bottom-left":
         this._panel.style.bottom = `${buttonBottom + buttonRect.height + gap}px`;
         this._panel.style.left = `${buttonLeft}px`;
+        available = mapRect.height - (buttonBottom + buttonRect.height + gap);
         break;
       case "bottom-right":
         this._panel.style.bottom = `${buttonBottom + buttonRect.height + gap}px`;
         this._panel.style.right = `${buttonRight}px`;
+        available = mapRect.height - (buttonBottom + buttonRect.height + gap);
         break;
+      default:
+        available = mapRect.height;
     }
+
+    this._panel.style.maxHeight = `${Math.max(minPanelHeight, available - margin)}px`;
   }
 }
 

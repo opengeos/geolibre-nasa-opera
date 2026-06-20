@@ -16,7 +16,11 @@ let pendingState: Partial<OperaState> | null = null;
 
 function createControl(app: AppAPI): OperaControl {
   const next = new OperaControl({
-    collapsed: pendingState?.collapsed ?? true,
+    // Open the panel immediately when the user activates the plugin so the
+    // search UI is visible right away, rather than only pinning the toolbar
+    // icon. A restored project (or a prior session) can still start collapsed
+    // by carrying `collapsed: true` in its saved state.
+    collapsed: pendingState?.collapsed ?? false,
     panelWidth: pendingState?.panelWidth ?? 340,
     title: "NASA OPERA",
     // Bind host capabilities; each degrades to a no-op when the host (or
@@ -47,7 +51,7 @@ function isOperaState(value: unknown): value is Partial<OperaState> {
 export const plugin: GeoLibrePlugin<OperaControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
-  version: "0.2.0",
+  version: "0.2.1",
   activate(app) {
     control = control ?? createControl(app);
     const added = app.addMapControl(control, position);
