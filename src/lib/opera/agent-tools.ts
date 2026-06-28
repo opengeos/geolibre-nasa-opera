@@ -18,6 +18,8 @@ export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available 
 Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surface water, SAR backscatter, or disturbance data.
 - Prefer search_and_display_opera when the user asks to find/show/display OPERA data in one request.
 - Use detect_opera_change_between_dates when the user asks to compare two dates, detect change, or create before/after OPERA layers.
+- Use analyze_opera_time_series when the user asks for trends, time-series change, repeated observations, or change over time.
+- Use export_opera_change_report after change detection when the user asks to export, save, summarize, or download the analysis.
 - If the user gives a place but not a bbox, use the current map extent unless you first navigate the map to the place with MapLibre tools.
 - For surface water requests, prefer product OPERA_L3_DSWX-HLS_V1 and band B01_WTR unless the user asks for Sentinel-1 DSWx.
 - For SAR backscatter, prefer product OPERA_L2_RTC-S1_V1 and band VV unless the user asks for another polarization.
@@ -85,6 +87,33 @@ const changeDetectionSchema = z.object({
   rescale: z.string().optional().describe("Optional render stretch such as '0,3000'."),
   colormap_name: z.string().optional().describe("Optional titiler named colormap, e.g. gray, blues."),
   expression: z.string().optional().describe("Optional rio-tiler expression; selected band is b1."),
+});
+
+const timeSeriesSchema = z.object({
+  product: z
+    .string()
+    .optional()
+    .describe("OPERA product short_name or label, e.g. OPERA_L3_DSWX-HLS_V1, DSWX-HLS, RTC-S1."),
+  bbox: bboxSchema,
+  start: z.string().describe("Inclusive start date, YYYY-MM-DD."),
+  end: z.string().describe("Inclusive end date, YYYY-MM-DD."),
+  count: z.number().int().min(1).max(100).optional().describe("Max observations to analyze. Defaults to 12."),
+  interval_days: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe("Optional sampling interval in days. The closest granule per interval is used."),
+  band: z.string().optional().describe("Band/layer token, e.g. B01_WTR, VV, VH."),
+  rescale: z.string().optional().describe("Optional render stretch such as '0,3000'."),
+  colormap_name: z.string().optional().describe("Optional titiler named colormap, e.g. gray, blues."),
+  expression: z.string().optional().describe("Optional rio-tiler expression; selected band is b1."),
+  display_endpoints: z.boolean().optional().describe("Display the first and last observations as map layers."),
+});
+
+const changeReportSchema = z.object({
+  format: z.enum(["markdown", "json"]).optional().describe("Report format. Defaults to markdown."),
 });
 
 const backendSchema = z.enum(["rasterio", "xarray"]);
@@ -236,6 +265,36 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
           rescale: input.rescale,
           colormapName: input.colormap_name,
           expression: input.expression,
+        })),
+    }),
+    tool({
+      name: "analyze_opera_time_series",
+      description:
+        "Analyze AOI statistics across OPERA granules over a date range and return first-to-last trend metrics. Can display first/last layers.",
+      inputSchema: timeSeriesSchema,
+      callback: async (input) =>
+        toJsonValue(await controlOrThrow().analyzeTimeSeriesForAgent({
+          product: input.product,
+          bbox: input.bbox as BBox | string | undefined,
+          start: input.start,
+          end: input.end,
+          count: input.count,
+          intervalDays: input.interval_days,
+          band: input.band,
+          rescale: input.rescale,
+          colormapName: input.colormap_name,
+          expression: input.expression,
+          displayEndpoints: input.display_endpoints,
+        })),
+    }),
+    tool({
+      name: "export_opera_change_report",
+      description:
+        "Return a Markdown or JSON report for the latest OPERA change detection result.",
+      inputSchema: changeReportSchema,
+      callback: (input) =>
+        toJsonValue(controlOrThrow().exportChangeReportForAgent({
+          format: input.format,
         })),
     }),
     tool({

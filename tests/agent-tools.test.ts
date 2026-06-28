@@ -18,6 +18,8 @@ describe("OPERA agent tools", () => {
       "display_opera_granules",
       "search_and_display_opera",
       "detect_opera_change_between_dates",
+      "analyze_opera_time_series",
+      "export_opera_change_report",
       "titiler_cmr_tilejson",
       "titiler_cmr_point_query",
       "titiler_cmr_statistics",
@@ -25,6 +27,7 @@ describe("OPERA agent tools", () => {
     ]);
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("search_and_display_opera");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("detect_opera_change_between_dates");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("analyze_opera_time_series");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("OPERA_L3_DSWX-HLS_V1");
   });
 
@@ -120,6 +123,67 @@ describe("OPERA agent tools", () => {
     expect(result).toMatchObject({
       ok: true,
       displayedLayerIds: ["before-layer", "after-layer"],
+    });
+  });
+
+  it("forwards time-series and report inputs to the OPERA control", async () => {
+    const control = {
+      analyzeTimeSeriesForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Analyzed 2 observations.",
+        product: "OPERA_L3_DSWX-HLS_V1",
+        band: "B01_WTR",
+        observations: [],
+        displayedLayerIds: [],
+      })),
+      exportChangeReportForAgent: vi.fn(() => ({
+        ok: true,
+        status: "Prepared markdown change report.",
+        filename: "opera-change.md",
+        format: "markdown",
+        content: "# report",
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown> | unknown;
+    }>;
+
+    await tools
+      .find((item) => item.name === "analyze_opera_time_series")!
+      ._callback({
+        product: "DSWX-HLS",
+        bbox: [-122, 37, -121, 38],
+        start: "2024-01-01",
+        end: "2024-03-01",
+        count: 4,
+        interval_days: 14,
+        band: "B01_WTR",
+        display_endpoints: true,
+      });
+    const report = await tools
+      .find((item) => item.name === "export_opera_change_report")!
+      ._callback({ format: "markdown" });
+
+    expect(control.analyzeTimeSeriesForAgent).toHaveBeenCalledWith({
+      product: "DSWX-HLS",
+      bbox: [-122, 37, -121, 38],
+      start: "2024-01-01",
+      end: "2024-03-01",
+      count: 4,
+      intervalDays: 14,
+      band: "B01_WTR",
+      rescale: undefined,
+      colormapName: undefined,
+      expression: undefined,
+      displayEndpoints: true,
+    });
+    expect(control.exportChangeReportForAgent).toHaveBeenCalledWith({
+      format: "markdown",
+    });
+    expect(report).toMatchObject({
+      ok: true,
+      filename: "opera-change.md",
     });
   });
 

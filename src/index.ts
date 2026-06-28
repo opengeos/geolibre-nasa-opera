@@ -9,9 +9,14 @@ export type {
   OperaAgentChangeObservation,
   OperaAgentChangeParams,
   OperaAgentChangeResult,
+  OperaAgentDerivedLayer,
   OperaAgentDisplayParams,
+  OperaAgentReportParams,
+  OperaAgentReportResult,
   OperaAgentResult,
   OperaAgentSearchParams,
+  OperaAgentTimeSeriesParams,
+  OperaAgentTimeSeriesResult,
 } from "./lib/core/OperaControl";
 
 // OPERA data layer
