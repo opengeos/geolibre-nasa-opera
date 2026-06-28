@@ -2,12 +2,17 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { getLayerBand } from "../src/lib/opera/cmr";
 import { bandRenderDefaults, expressionPresets } from "../src/lib/opera/products";
 import {
+  buildCmrPointUrl,
+  buildCmrStatisticsUrl,
+  buildCmrTileJsonUrl,
+  buildCmrTimeseriesTileJsonUrl,
   buildPointUrl,
   buildStatisticsUrl,
   buildTileJsonUrl,
   fetchPoint,
   fetchStatistics,
   granuleDatetime,
+  resolveDefaultTitilerCmrEndpoint,
   tileSizeFromTemplate,
 } from "../src/lib/opera/titiler";
 
@@ -31,6 +36,12 @@ describe("getLayerBand", () => {
 });
 
 describe("buildTileJsonUrl", () => {
+  it("resolves configurable default titiler-cmr endpoints", () => {
+    expect(resolveDefaultTitilerCmrEndpoint(" https://proxy.example/ ")).toBe(
+      "https://proxy.example",
+    );
+  });
+
   it("builds the canonical rasterio path with modern param names", () => {
     const url = buildTileJsonUrl({
       endpoint: "https://host/api/titiler-cmr",
@@ -51,6 +62,77 @@ describe("buildTileJsonUrl", () => {
     expect(url).toContain("temporal=");
     expect(url).toContain("rescale=0%2C4");
     expect(url).toContain("colormap_name=viridis");
+  });
+});
+
+describe("backend-neutral titiler-cmr URL builders", () => {
+  it("builds an xarray tilejson URL with variables, group, and sel", () => {
+    const url = buildCmrTileJsonUrl({
+      endpoint: "https://host/api/titiler-cmr/",
+      backend: "xarray",
+      conceptId: "C999-POCLOUD",
+      variables: ["water_class", "confidence"],
+      group: "/science/grids",
+      sel: { time: "2024-02-01T00:00:00Z" },
+      rescale: ["0,1", "0,100"],
+      colormapName: "viridis",
+      extraParams: { decode_times: true },
+    });
+
+    expect(url).toContain("/xarray/WebMercatorQuad/tilejson.json?");
+    expect(url).toContain("collection_concept_id=C999-POCLOUD");
+    expect(url).toContain("variables=water_class");
+    expect(url).toContain("variables=confidence");
+    expect(url).toContain("group=%2Fscience%2Fgrids");
+    expect(url).toContain("sel=%7B%22time%22%3A%222024-02-01T00%3A00%3A00Z%22%7D");
+    expect(url).toContain("rescale=0%2C1");
+    expect(url).toContain("rescale=0%2C100");
+    expect(url).toContain("decode_times=true");
+  });
+
+  it("builds rasterio point and statistics URLs with pass-through params", () => {
+    const point = buildCmrPointUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      backend: "rasterio",
+      conceptId: "C1-X",
+      lon: -120,
+      lat: 38,
+      assets: ["VV"],
+      assetsRegex: "VV|VH",
+      extraParams: { nodata: 0 },
+    });
+    const stats = buildCmrStatisticsUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      backend: "rasterio",
+      conceptId: "C1-X",
+      assets: ["B01_WTR"],
+      categorical: true,
+    });
+
+    expect(point).toContain("/rasterio/point/-120,38?");
+    expect(point).toContain("assets=VV");
+    expect(point).toContain("assets_regex=VV%7CVH");
+    expect(point).toContain("nodata=0");
+    expect(stats).toContain("/rasterio/statistics?");
+    expect(stats).toContain("categorical=true");
+  });
+
+  it("builds a timeseries TileJSON URL", () => {
+    const url = buildCmrTimeseriesTileJsonUrl({
+      endpoint: "https://host/api/titiler-cmr",
+      backend: "xarray",
+      conceptId: "C2-X",
+      variables: ["band1"],
+      temporal: "2024-01-01T00:00:00Z/2024-02-01T00:00:00Z",
+      step: "P1D",
+      temporalMode: "interval",
+    });
+
+    expect(url).toContain("/xarray/timeseries/WebMercatorQuad/tilejson.json?");
+    expect(url).toContain("variables=band1");
+    expect(url).toContain("temporal=");
+    expect(url).toContain("step=P1D");
+    expect(url).toContain("temporal_mode=interval");
   });
 });
 
