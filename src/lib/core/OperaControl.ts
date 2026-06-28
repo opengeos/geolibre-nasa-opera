@@ -37,10 +37,13 @@ import {
   fetchPoint,
   fetchStatistics,
   fetchTileJson,
+  resolveDefaultTitilerCmrEndpoint,
+  tileJsonBounds,
   tileSizeFromTemplate,
   type BandStatistics,
   type PointResult,
   type StatisticsResult,
+  type TileJson,
 } from "../opera/titiler";
 import type {
   BBox,
@@ -93,6 +96,100 @@ export interface OperaControlOptions {
   fitBounds?: (bounds: BBox) => void;
   /** Read the current map extent as a `[w, s, e, n]` box. */
   getMapBounds?: () => BBox | null;
+  /** Initial titiler-cmr endpoint. Overrides runtime/build defaults. */
+  defaultEndpoint?: string;
+}
+
+export interface OperaAgentSearchParams {
+  /** OPERA CMR short_name or short title, e.g. OPERA_L3_DSWX-HLS_V1 or DSWX-HLS. */
+  product?: string;
+  /** Bounding box as [west, south, east, north] or "west,south,east,north". */
+  bbox?: BBox | string;
+  /** Inclusive start date, YYYY-MM-DD. */
+  start?: string;
+  /** Inclusive end date, YYYY-MM-DD. */
+  end?: string;
+  /** Max granules to request. */
+  count?: number;
+}
+
+export interface OperaAgentDisplayParams {
+  /** Granule ids from the latest search. Omit to display the first matching result(s). */
+  granuleIds?: string[];
+  /** Max granules to display when granuleIds is omitted. */
+  maxGranules?: number;
+  /** Band/layer token, e.g. B01_WTR, VV, VH, B10_DEM. */
+  band?: string;
+  /** Optional "min,max" render stretch. */
+  rescale?: string;
+  /** Optional titiler named colormap. */
+  colormapName?: string;
+  /** Optional rio-tiler expression; selected band is b1. */
+  expression?: string;
+}
+
+export interface OperaAgentChangeParams {
+  /** OPERA CMR short_name or short title. */
+  product?: string;
+  /** AOI bbox as [west, south, east, north] or "west,south,east,north". */
+  bbox?: BBox | string;
+  /** Baseline date, YYYY-MM-DD. */
+  beforeDate: string;
+  /** Comparison date, YYYY-MM-DD. */
+  afterDate: string;
+  /** Days on each side of each date to search for a nearby granule. */
+  windowDays?: number;
+  /** Band/layer token, e.g. B01_WTR, VV, VH. */
+  band?: string;
+  /** Optional rio-tiler expression used for display/statistics. */
+  expression?: string;
+  /** Optional "min,max" render stretch. */
+  rescale?: string;
+  /** Optional titiler named colormap. */
+  colormapName?: string;
+}
+
+export interface OperaAgentResult {
+  ok: boolean;
+  status: string;
+  product: string;
+  granules: Array<{
+    id: string;
+    beginDate?: string;
+    endDate?: string;
+    bbox?: BBox;
+    bands: string[];
+    linkCount: number;
+  }>;
+}
+
+export interface OperaAgentChangeResult {
+  ok: boolean;
+  status: string;
+  product: string;
+  band: string;
+  bbox?: BBox;
+  before?: OperaAgentChangeObservation;
+  after?: OperaAgentChangeObservation;
+  change?: Record<string, number | string | null>;
+  displayedLayerIds: string[];
+}
+
+export interface OperaAgentChangeObservation {
+  date: string;
+  granuleId: string;
+  granuleDate?: string;
+  layerIds: string[];
+  statistics?: Record<string, number | string | null>;
+}
+
+export interface OperaAgentTileLayerParams {
+  id?: string;
+  name: string;
+  tilejson: TileJson;
+  metadata?: Record<string, unknown>;
+  opacity?: number;
+  fitBounds?: boolean;
 }
 
 const PANEL_CLASS = "plugin-control-panel opera-panel";
@@ -164,6 +261,7 @@ export class OperaControl implements IControl {
   private _downloadAllBtn?: HTMLButtonElement;
   private _options: OperaControlOptions;
   private _state: OperaState;
+  private _lastStatus = "";
 
   private _granules: OperaGranule[] = [];
   // Current displayed (sorted) order of the results table.
@@ -213,7 +311,7 @@ export class OperaControl implements IControl {
       rescale: "",
       colormapName: "",
       expression: "",
-      endpoint: DEFAULT_TITILER_CMR_ENDPOINT,
+      endpoint: resolveDefaultTitilerCmrEndpoint(options.defaultEndpoint),
     };
   }
 
@@ -303,6 +401,311 @@ export class OperaControl implements IControl {
 
   expand(): void {
     if (this._state.collapsed) this.toggle();
+  }
+
+  getAgentContext(): OperaAgentResult & {
+    products: Array<{ shortName: string; shortTitle: string; description: string }>;
+    selectedGranuleIds: string[];
+    endpoint: string;
+    bbox: string;
+    start: string;
+    end: string;
+  } {
+    this._readForm();
+    return {
+      ok: true,
+      status: this._lastStatus,
+      product: this._state.product,
+      endpoint: this._state.endpoint,
+      bbox: this._state.bbox,
+      start: this._state.start,
+      end: this._state.end,
+      selectedGranuleIds: [...this._selectedIds],
+      products: OPERA_PRODUCTS.map((p) => ({
+        shortName: p.shortName,
+        shortTitle: p.shortTitle,
+        description: p.description,
+      })),
+      granules: this._agentGranuleSummaries(),
+    };
+  }
+
+  async searchForAgent(params: OperaAgentSearchParams): Promise<OperaAgentResult> {
+    this.expand();
+    const product = params.product ? resolveProductForAgent(params.product) : undefined;
+    if (params.product && !product) {
+      return {
+        ok: false,
+        status: `Unknown OPERA product: ${params.product}`,
+        product: this._state.product,
+        granules: this._agentGranuleSummaries(),
+      };
+    }
+    if (product) this._state.product = product.shortName;
+    if (params.bbox !== undefined) {
+      const bbox = normalizeAgentBBox(params.bbox);
+      if (!bbox) {
+        return {
+          ok: false,
+          status: "Invalid bbox. Use [west,south,east,north].",
+          product: this._state.product,
+          granules: this._agentGranuleSummaries(),
+        };
+      }
+      this._state.bbox = bbox.map((v) => trimNumber(v)).join(", ");
+    }
+    if (params.start !== undefined) this._state.start = params.start;
+    if (params.end !== undefined) this._state.end = params.end;
+    if (params.count !== undefined && Number.isFinite(params.count)) {
+      this._state.count = Math.min(Math.max(Math.round(params.count), 1), 500);
+    }
+    this._syncForm();
+    await this._onSearch();
+    return {
+      ok: !/^Search failed:/i.test(this._lastStatus),
+      status: this._lastStatus,
+      product: this._state.product,
+      granules: this._agentGranuleSummaries(),
+    };
+  }
+
+  async displayForAgent(params: OperaAgentDisplayParams): Promise<
+    OperaAgentResult & { displayedLayerIds: string[]; selectedGranuleIds: string[] }
+  > {
+    this.expand();
+    const selected = this._selectGranulesForAgent(
+      params.granuleIds,
+      params.maxGranules,
+    );
+    if (selected.length === 0) {
+      return {
+        ok: false,
+        status:
+          "No granules selected. Run search_opera_granules first or pass granuleIds from the latest search.",
+        product: this._state.product,
+        granules: this._agentGranuleSummaries(),
+        displayedLayerIds: [],
+        selectedGranuleIds: [],
+      };
+    }
+    if (params.band) this._setBandForAgent(params.band);
+    if (params.rescale !== undefined) {
+      this._state.rescale = params.rescale;
+      if (this._rescaleInput) this._rescaleInput.value = params.rescale;
+    }
+    if (params.colormapName !== undefined) {
+      this._state.colormapName = params.colormapName;
+      if (this._colormapSelect) this._colormapSelect.value = params.colormapName;
+    }
+    if (params.expression !== undefined) {
+      this._setExpression(params.expression);
+    }
+    const before = new Set(this._registeredLayerIds);
+    await this._onDisplay();
+    const displayedLayerIds = this._registeredLayerIds.filter((id) => !before.has(id));
+    return {
+      ok: displayedLayerIds.length > 0 && !/^Display failed:/i.test(this._lastStatus),
+      status: this._lastStatus,
+      product: this._state.product,
+      granules: this._agentGranuleSummaries(),
+      displayedLayerIds,
+      selectedGranuleIds: [...this._selectedIds],
+    };
+  }
+
+  registerTileJsonForAgent(params: OperaAgentTileLayerParams): {
+    ok: boolean;
+    layerId?: string;
+    status: string;
+  } {
+    const tileUrl = params.tilejson.tiles[0];
+    if (!tileUrl) {
+      return { ok: false, status: "TileJSON did not include any tile URL." };
+    }
+    const layerId = params.id ?? `titiler-cmr-${slug(params.name) || Date.now()}`;
+    this._registerLayer({
+      id: layerId,
+      name: params.name,
+      type: "raster",
+      source: {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: tileSizeFromTemplate(tileUrl),
+        ...(params.tilejson.minzoom != null
+          ? { minzoom: params.tilejson.minzoom }
+          : {}),
+        ...(params.tilejson.maxzoom != null
+          ? { maxzoom: params.tilejson.maxzoom }
+          : {}),
+      },
+      nativeLayerIds: [],
+      opacity: params.opacity ?? 1,
+      metadata: params.metadata,
+    });
+    const bounds = tileJsonBounds(params.tilejson);
+    if (params.fitBounds !== false && bounds) this._options.fitBounds?.(bounds);
+    const status = `Registered titiler-cmr layer ${layerId}.`;
+    this._setStatus(status);
+    return { ok: true, layerId, status };
+  }
+
+  async detectChangeForAgent(
+    params: OperaAgentChangeParams,
+  ): Promise<OperaAgentChangeResult> {
+    this.expand();
+    const product =
+      params.product !== undefined
+        ? resolveProductForAgent(params.product)
+        : getProduct(this._state.product);
+    if (!product) {
+      return {
+        ok: false,
+        status: `Unknown OPERA product: ${params.product ?? this._state.product}`,
+        product: this._state.product,
+        band: params.band ?? "",
+        displayedLayerIds: [],
+      };
+    }
+    const bbox =
+      params.bbox !== undefined
+        ? normalizeAgentBBox(params.bbox)
+        : this._currentBBox();
+    if (!bbox) {
+      return {
+        ok: false,
+        status: "Set or pass a bbox for change detection.",
+        product: product.shortName,
+        band: params.band ?? product.render.bands?.[0] ?? "",
+        displayedLayerIds: [],
+      };
+    }
+    const windowDays = Math.min(Math.max(params.windowDays ?? 7, 0), 90);
+    const beforeRange = dateWindow(params.beforeDate, windowDays);
+    const afterRange = dateWindow(params.afterDate, windowDays);
+    const band = params.band ?? product.render.bands?.[0] ?? "";
+
+    this._setStatus("Searching before/after OPERA granules…");
+    try {
+      const [beforeSearch, afterSearch] = await Promise.all([
+        searchGranules({
+          shortName: product.shortName,
+          bbox,
+          start: beforeRange.start,
+          end: beforeRange.end,
+          count: 20,
+        }),
+        searchGranules({
+          shortName: product.shortName,
+          bbox,
+          start: afterRange.start,
+          end: afterRange.end,
+          count: 20,
+        }),
+      ]);
+      const beforeGranule = closestGranule(beforeSearch.granules, params.beforeDate);
+      const afterGranule = closestGranule(afterSearch.granules, params.afterDate);
+      if (!beforeGranule || !afterGranule) {
+        return {
+          ok: false,
+          status: "No before/after granule pair found for the requested dates.",
+          product: product.shortName,
+          band,
+          bbox,
+          displayedLayerIds: [],
+        };
+      }
+
+      this._state.product = product.shortName;
+      this._state.bbox = bbox.map((v) => trimNumber(v)).join(", ");
+      this._state.start = beforeRange.start;
+      this._state.end = afterRange.end;
+      this._state.count = 2;
+      this._state.expression = params.expression ?? "";
+      this._state.rescale = params.rescale ?? bandRenderDefaults(product.shortName, band).rescale;
+      this._state.colormapName =
+        params.colormapName ?? bandRenderDefaults(product.shortName, band).colormapName;
+      this._granules = [beforeGranule, afterGranule];
+      this._renderResults();
+      this._syncForm();
+      this._options.addGeoJsonLayer?.(`OPERA ${product.shortTitle} Change Pair`, {
+        type: "FeatureCollection",
+        features: [beforeGranule, afterGranule]
+          .filter((granule) => granule.geometry)
+          .map((granule, index) => ({
+            type: "Feature",
+            geometry: granule.geometry,
+            properties: {
+              _operaGranuleId: granule.id,
+              id: granule.id,
+              role: index === 0 ? "before" : "after",
+              beginDate: granule.beginDate ?? "",
+            },
+          })),
+      });
+      this._options.fitBounds?.(this._combinedBounds(this._granules) ?? bbox);
+
+      const beforeDisplay = await this.displayForAgent({
+        granuleIds: [beforeGranule.id],
+        band,
+        rescale: params.rescale,
+        colormapName: params.colormapName,
+        expression: params.expression,
+      });
+      const afterDisplay = await this.displayForAgent({
+        granuleIds: [afterGranule.id],
+        band,
+        rescale: params.rescale,
+        colormapName: params.colormapName,
+        expression: params.expression,
+      });
+      const [beforeStats, afterStats] = await Promise.all([
+        this._statsForChange(product.shortName, beforeGranule, band, bbox, params.expression),
+        this._statsForChange(product.shortName, afterGranule, band, bbox, params.expression),
+      ]);
+      const change = changeDelta(beforeStats, afterStats);
+      const status =
+        hasStatisticError(beforeStats) || hasStatisticError(afterStats)
+          ? `Change detection displayed for ${product.shortTitle} ${band}; statistics unavailable.`
+          : `Change detection complete for ${product.shortTitle} ${band}.`;
+      this._setStatus(status);
+      return {
+        ok: true,
+        status,
+        product: product.shortName,
+        band,
+        bbox,
+        before: {
+          date: params.beforeDate,
+          granuleId: beforeGranule.id,
+          granuleDate: beforeGranule.beginDate,
+          layerIds: beforeDisplay.displayedLayerIds,
+          statistics: beforeStats,
+        },
+        after: {
+          date: params.afterDate,
+          granuleId: afterGranule.id,
+          granuleDate: afterGranule.beginDate,
+          layerIds: afterDisplay.displayedLayerIds,
+          statistics: afterStats,
+        },
+        change,
+        displayedLayerIds: [
+          ...beforeDisplay.displayedLayerIds,
+          ...afterDisplay.displayedLayerIds,
+        ],
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        status: `Change detection failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        product: product.shortName,
+        band,
+        bbox,
+        displayedLayerIds: [],
+      };
+    }
   }
 
   // --- Layer registration ------------------------------------------------
@@ -466,6 +869,46 @@ export class OperaControl implements IControl {
     }
   }
 
+  private async _statsForChange(
+    shortName: string,
+    granule: OperaGranule,
+    band: string | undefined,
+    bbox: BBox,
+    expression?: string,
+  ): Promise<Record<string, number | string | null> | undefined> {
+    const product = getProduct(shortName);
+    if (!product) return undefined;
+    const conceptId = granule.conceptId ?? (await resolveConceptId(shortName));
+    const expr = expression?.trim();
+    const categorical = !expr && isCategoricalBand(shortName, band);
+    const url = buildStatisticsUrl({
+      endpoint: this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT,
+      conceptId,
+      backend: product.render.backend,
+      granuleUr: granule.id,
+      bands: band ? [band] : product.render.bands,
+      bandsRegex: product.render.bandsRegex,
+      categorical,
+      expression: expr,
+      histogramBins: categorical ? undefined : 20,
+    });
+    let bandStats: BandStatistics | undefined;
+    try {
+      const stats = await fetchStatistics(url, bboxFeature(bbox));
+      bandStats = firstBandStats(stats);
+    } catch (err) {
+      return {
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (!bandStats) return { error: "No statistics returned for AOI." };
+
+    if (isDswxWaterBand(shortName, band) && !expr) {
+      return waterStatisticsSummary(bandStats);
+    }
+    return continuousStatisticsSummary(bandStats);
+  }
+
   /** Toggle the Display button's loading state. */
   private _setDisplayBusy(busy: boolean): void {
     const btn = this._displayBtn;
@@ -534,6 +977,52 @@ export class OperaControl implements IControl {
     // mode if there is nothing left to query.
     if (this._inspecting && (!hasSelection || !hasBand)) this._stopInspect();
     this._highlightSelectedFootprints();
+  }
+
+  private _agentGranuleSummaries(): OperaAgentResult["granules"] {
+    return this._granules.map((granule) => ({
+      id: granule.id,
+      beginDate: granule.beginDate,
+      endDate: granule.endDate,
+      bbox: granule.bbox,
+      bands: granuleBands(granule).map((band) => band.token),
+      linkCount: granule.dataLinks.length,
+    }));
+  }
+
+  private _selectGranulesForAgent(
+    granuleIds: string[] | undefined,
+    maxGranules: number | undefined,
+  ): OperaGranule[] {
+    const wanted = new Set((granuleIds ?? []).map((id) => id.trim()).filter(Boolean));
+    const limit =
+      maxGranules !== undefined && Number.isFinite(maxGranules)
+        ? Math.min(Math.max(Math.round(maxGranules), 1), 25)
+        : granuleIds && granuleIds.length > 0
+          ? granuleIds.length
+          : 1;
+    const selected =
+      wanted.size > 0
+        ? this._granules.filter((granule) => wanted.has(granule.id))
+        : this._granules.slice(0, limit);
+    this._selectedIds = new Set(selected.map((granule) => granule.id));
+    this._activeGranule = selected[0] ?? null;
+    this._anchorId = this._activeGranule?.id ?? null;
+    this._refreshSelectionUI(this._activeGranule?.id);
+    return selected;
+  }
+
+  private _setBandForAgent(band: string): void {
+    const token = band.trim();
+    if (!token || !this._bandSelect) return;
+    if (!Array.from(this._bandSelect.options).some((option) => option.value === token)) {
+      const opt = document.createElement("option");
+      opt.value = token;
+      opt.textContent = token;
+      this._bandSelect.appendChild(opt);
+    }
+    this._bandSelect.value = token;
+    this._applyBandDefaults(token);
   }
 
   /** Union of the given granules' bounding boxes. */
@@ -1816,6 +2305,7 @@ export class OperaControl implements IControl {
   }
 
   private _setStatus(message: string): void {
+    this._lastStatus = message;
     if (this._status) this._status.textContent = message;
   }
 
@@ -1938,6 +2428,180 @@ function slug(value: string): string {
 
 function shorten(value: string, max = 28): string {
   return value.length > max ? `…${value.slice(value.length - max)}` : value;
+}
+
+function trimNumber(value: number): string {
+  return parseFloat(value.toFixed(6)).toString();
+}
+
+function normalizeAgentBBox(value: BBox | string): BBox | undefined {
+  const parts = Array.isArray(value)
+    ? value
+    : value.split(",").map((part) => Number(part.trim()));
+  if (parts.length !== 4 || !parts.every(Number.isFinite)) return undefined;
+  const [w, s, e, n] = parts.map(Number);
+  if (w >= e || s >= n) return undefined;
+  return [w, s, e, n];
+}
+
+function resolveProductForAgent(value: string): ReturnType<typeof getProduct> {
+  const normalized = value.trim().toLowerCase();
+  return OPERA_PRODUCTS.find(
+    (product) =>
+      product.shortName.toLowerCase() === normalized ||
+      product.shortTitle.toLowerCase() === normalized ||
+      product.title.toLowerCase() === normalized,
+  );
+}
+
+function dateWindow(date: string, windowDays: number): { start: string; end: string } {
+  const center = parseIsoDate(date);
+  const days = Math.max(Math.round(windowDays), 0);
+  return {
+    start: addDays(center, -days).toISOString().slice(0, 10),
+    end: addDays(center, days).toISOString().slice(0, 10),
+  };
+}
+
+function parseIsoDate(value: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) throw new Error(`Invalid date "${value}". Use YYYY-MM-DD.`);
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`Invalid date "${value}". Use YYYY-MM-DD.`);
+  }
+  return date;
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function closestGranule(
+  granules: OperaGranule[],
+  targetDate: string,
+): OperaGranule | undefined {
+  const target = parseIsoDate(targetDate).getTime();
+  return [...granules].sort((a, b) => {
+    const da = Math.abs(granuleTime(a) - target);
+    const db = Math.abs(granuleTime(b) - target);
+    return da - db;
+  })[0];
+}
+
+function granuleTime(granule: OperaGranule): number {
+  const value = granule.beginDate ?? granule.endDate ?? "";
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : Infinity;
+}
+
+function bboxFeature(bbox: BBox): unknown {
+  const [w, s, e, n] = bbox;
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [w, s],
+          [e, s],
+          [e, n],
+          [w, n],
+          [w, s],
+        ],
+      ],
+    },
+  };
+}
+
+function waterStatisticsSummary(
+  stats: BandStatistics,
+): Record<string, number | string | null> {
+  let openWaterPixels = 0;
+  let partialWaterPixels = 0;
+  let validPixels = 0;
+  if (stats.histogram) {
+    const [counts, values] = stats.histogram;
+    values.forEach((value, index) => {
+      const count = counts[index] ?? 0;
+      validPixels += count;
+      if (value === DSWX_OPEN_WATER_CLASS) openWaterPixels = count;
+      if (value === DSWX_PARTIAL_WATER_CLASS) partialWaterPixels = count;
+    });
+  }
+  const surfaceWaterPixels = openWaterPixels + partialWaterPixels;
+  return {
+    metric: "DSWx water class area",
+    validPixels,
+    validKm2: pixelsToKm2(validPixels),
+    openWaterPixels,
+    openWaterKm2: pixelsToKm2(openWaterPixels),
+    openWaterPercent:
+      validPixels > 0 ? (openWaterPixels / validPixels) * 100 : null,
+    partialWaterPixels,
+    partialWaterKm2: pixelsToKm2(partialWaterPixels),
+    surfaceWaterPixels,
+    surfaceWaterKm2: pixelsToKm2(surfaceWaterPixels),
+    surfaceWaterPercent:
+      validPixels > 0 ? (surfaceWaterPixels / validPixels) * 100 : null,
+  };
+}
+
+function continuousStatisticsSummary(
+  stats: BandStatistics,
+): Record<string, number | string | null> {
+  return {
+    metric: "continuous raster statistics",
+    min: stats.min,
+    max: stats.max,
+    mean: stats.mean,
+    std: stats.std,
+    median: stats.median ?? null,
+    count: stats.count,
+    validPixels: stats.validPixels ?? null,
+    validPercent: stats.validPercent ?? null,
+    validKm2:
+      stats.validPixels != null ? pixelsToKm2(stats.validPixels) : null,
+    percentile2: stats.percentile2 ?? null,
+    percentile98: stats.percentile98 ?? null,
+  };
+}
+
+function changeDelta(
+  before?: Record<string, number | string | null>,
+  after?: Record<string, number | string | null>,
+): Record<string, number | string | null> {
+  if (!before || !after) return {};
+  const delta: Record<string, number | string | null> = {};
+  for (const [key, afterValue] of Object.entries(after)) {
+    const beforeValue = before[key];
+    if (typeof beforeValue !== "number" || typeof afterValue !== "number") {
+      continue;
+    }
+    const change = afterValue - beforeValue;
+    delta[`${key}Before`] = beforeValue;
+    delta[`${key}After`] = afterValue;
+    delta[`${key}Change`] = change;
+    delta[`${key}PercentChange`] =
+      beforeValue !== 0 ? (change / Math.abs(beforeValue)) * 100 : null;
+  }
+  return delta;
+}
+
+function hasStatisticError(
+  stats?: Record<string, number | string | null>,
+): boolean {
+  return typeof stats?.error === "string" && stats.error.length > 0;
 }
 
 /** Format a number for the inspect popup: integers as-is, floats trimmed. */

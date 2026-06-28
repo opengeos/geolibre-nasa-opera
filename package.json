@@ -46,6 +46,8 @@
     "package:geolibre": "npm run build:geolibre && node scripts/package-geolibre-plugin.mjs",
     "install:geolibre": "npm run build:geolibre && node scripts/install-geolibre-plugin.mjs",
     "serve:geolibre": "node scripts/serve-geolibre-plugin.mjs",
+    "proxy:dev": "wrangler dev --local --port 8787",
+    "proxy:deploy": "wrangler deploy",
     "preview": "vite preview",
     "test": "vitest --run",
     "test:ui": "vitest --ui",
@@ -64,6 +66,8 @@
     "cmr",
     "titiler",
     "cog",
+    "geoagent",
+    "agent",
     "plugin",
     "typescript"
   ],
@@ -110,7 +114,10 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
+    "@strands-agents/sdk": "^1.7.0",
     "@tauri-apps/api": "^2.11.0",
-    "@tauri-apps/plugin-opener": "^2.5.4"
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "maplibre-gl-geoagent": "^0.5.4",
+    "zod": "^4.4.3"
   }
 }

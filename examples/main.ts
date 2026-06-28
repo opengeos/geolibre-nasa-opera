@@ -8,8 +8,14 @@
  * they do inside GeoLibre. Run with `npm run dev`.
  */
 import maplibregl from "maplibre-gl";
+import { GeoAgentControl } from "maplibre-gl-geoagent";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "maplibre-gl-geoagent/style.css";
 import { OperaControl, type BBox } from "../src/index";
+import {
+  createOperaAgentTools,
+  OPERA_AGENT_SYSTEM_PROMPT,
+} from "../src/lib/opera/agent-tools";
 import "../src/index.css";
 
 type GeoJsonData = Parameters<maplibregl.GeoJSONSource["setData"]>[0];
@@ -75,4 +81,18 @@ map.on("load", () => {
   });
 
   map.addControl(control, "top-left");
+  map.addControl(
+    new GeoAgentControl({
+      title: "OPERA GeoAgent",
+      collapsed: true,
+      panelWidth: 410,
+      storagePrefix: "geolibre.nasa-opera.geoagent",
+      allowCodeExecutionDefault: true,
+      allowDestructiveToolsDefault: false,
+      showPermissionToggles: true,
+      customSystemPrompt: OPERA_AGENT_SYSTEM_PROMPT,
+      customTools: () => createOperaAgentTools(() => control),
+    }),
+    "top-right",
+  );
 });

@@ -1,18 +1,36 @@
+import {
+  GeoAgentControl,
+  type GeoAgentState,
+} from "maplibre-gl-geoagent";
 import { OperaControl, type OperaState } from "./lib/core/OperaControl";
 import type {
   GeoLibreAppAPI,
+  GeoLibreControl,
   GeoLibreMapControlPosition,
   GeoLibrePlugin,
 } from "./lib/geolibre/host-api";
 import type { BBox } from "./lib/opera/types";
+import {
+  createOperaAgentTools,
+  OPERA_AGENT_SYSTEM_PROMPT,
+} from "./lib/opera/agent-tools";
 import "./lib/styles/plugin-control.css";
+import "maplibre-gl-geoagent/style.css";
 
-// Bind the host API generic to this plugin's concrete control type.
-type AppAPI = GeoLibreAppAPI<OperaControl>;
+// This plugin owns two MapLibre controls: the OPERA search panel and a
+// companion GeoAgent chat panel. Use the structural control type for host calls.
+type AppAPI = GeoLibreAppAPI<GeoLibreControl>;
 
-let control: OperaControl | null = null;
+interface NasaOperaProjectState {
+  opera?: Partial<OperaState>;
+  geoAgent?: Partial<GeoAgentState>;
+}
+
+let operaControl: OperaControl | null = null;
+let geoAgentControl: GeoAgentControl | null = null;
 let position: GeoLibreMapControlPosition = "top-left";
-let pendingState: Partial<OperaState> | null = null;
+let pendingOperaState: Partial<OperaState> | null = null;
+let pendingGeoAgentState: Partial<GeoAgentState> | null = null;
 
 function createControl(app: AppAPI): OperaControl {
   const next = new OperaControl({
@@ -20,8 +38,8 @@ function createControl(app: AppAPI): OperaControl {
     // search UI is visible right away, rather than only pinning the toolbar
     // icon. A restored project (or a prior session) can still start collapsed
     // by carrying `collapsed: true` in its saved state.
-    collapsed: pendingState?.collapsed ?? false,
-    panelWidth: pendingState?.panelWidth ?? 340,
+    collapsed: pendingOperaState?.collapsed ?? false,
+    panelWidth: pendingOperaState?.panelWidth ?? 340,
     title: "NASA OPERA",
     // Bind host capabilities; each degrades to a no-op when the host (or
     // standalone usage) does not provide it.
@@ -32,8 +50,43 @@ function createControl(app: AppAPI): OperaControl {
     getMapBounds: () => readMapBounds(app),
   });
 
-  if (pendingState) next.setState(pendingState);
+  if (pendingOperaState) next.setState(pendingOperaState);
   return next;
+}
+
+function createGeoAgentControl(): GeoAgentControl {
+  const next = new GeoAgentControl({
+    collapsed: pendingGeoAgentState?.collapsed ?? true,
+    panelWidth: pendingGeoAgentState?.panelWidth ?? 410,
+    panelHeight: pendingGeoAgentState?.panelHeight,
+    title: "OPERA GeoAgent",
+    storagePrefix: "geolibre.nasa-opera.geoagent",
+    allowCodeExecutionDefault: pendingGeoAgentState?.allowCodeExecution ?? true,
+    allowDestructiveToolsDefault:
+      pendingGeoAgentState?.allowDestructiveTools ?? false,
+    showPermissionToggles: true,
+    customSystemPrompt: OPERA_AGENT_SYSTEM_PROMPT,
+    customTools: () => createOperaAgentTools(() => operaControl),
+  });
+
+  if (pendingGeoAgentState) next.setState(pendingGeoAgentState);
+  return next;
+}
+
+function companionPosition(
+  primary: GeoLibreMapControlPosition,
+): GeoLibreMapControlPosition {
+  switch (primary) {
+    case "top-right":
+      return "top-left";
+    case "bottom-left":
+      return "bottom-right";
+    case "bottom-right":
+      return "bottom-left";
+    case "top-left":
+    default:
+      return "top-right";
+  }
 }
 
 /** Read the current map extent as a `[w, s, e, n]` box, or null. */
@@ -48,45 +101,96 @@ function isOperaState(value: unknown): value is Partial<OperaState> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-export const plugin: GeoLibrePlugin<OperaControl> = {
+function isNasaOperaProjectState(
+  value: unknown,
+): value is NasaOperaProjectState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return "opera" in value || "geoAgent" in value;
+}
+
+export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
   version: "0.2.1",
   activate(app) {
-    control = control ?? createControl(app);
-    const added = app.addMapControl(control, position);
+    operaControl = operaControl ?? createControl(app);
+    const added = app.addMapControl(operaControl, position);
     if (!added) {
-      control = null;
+      operaControl = null;
+      return false;
+    }
+
+    geoAgentControl = geoAgentControl ?? createGeoAgentControl();
+    const agentAdded = app.addMapControl(
+      geoAgentControl,
+      companionPosition(position),
+    );
+    if (!agentAdded) {
+      app.removeMapControl(operaControl);
+      operaControl = null;
+      geoAgentControl = null;
       return false;
     }
   },
   deactivate(app) {
-    if (!control) return;
-    pendingState = control.getState();
-    app.removeMapControl(control);
-    control = null;
+    if (geoAgentControl) {
+      pendingGeoAgentState = geoAgentControl.getState();
+      app.removeMapControl(geoAgentControl);
+      geoAgentControl = null;
+    }
+    if (operaControl) {
+      pendingOperaState = operaControl.getState();
+      app.removeMapControl(operaControl);
+      operaControl = null;
+    }
   },
   getMapControlPosition() {
     return position;
   },
   setMapControlPosition(app, nextPosition) {
     position = nextPosition;
-    if (!control) return;
-    app.removeMapControl(control);
-    const added = app.addMapControl(control, position);
-    if (!added) {
-      pendingState = control.getState();
-      control = null;
+    if (!operaControl) return;
+    if (geoAgentControl) app.removeMapControl(geoAgentControl);
+    app.removeMapControl(operaControl);
+
+    const added = app.addMapControl(operaControl, position);
+    const agentAdded =
+      !geoAgentControl ||
+      app.addMapControl(geoAgentControl, companionPosition(position));
+    if (!added || !agentAdded) {
+      pendingOperaState = operaControl.getState();
+      pendingGeoAgentState = geoAgentControl?.getState() ?? null;
+      if (added) app.removeMapControl(operaControl);
+      if (agentAdded && geoAgentControl) app.removeMapControl(geoAgentControl);
+      operaControl = null;
+      geoAgentControl = null;
       return false;
     }
   },
   getProjectState() {
-    return control?.getState() ?? pendingState ?? undefined;
+    return {
+      opera: operaControl?.getState() ?? pendingOperaState ?? undefined,
+      geoAgent:
+        geoAgentControl?.getState() ?? pendingGeoAgentState ?? undefined,
+    } satisfies NasaOperaProjectState;
   },
   applyProjectState(_app, state) {
+    if (isNasaOperaProjectState(state)) {
+      pendingOperaState = isOperaState(state.opera) ? state.opera : null;
+      pendingGeoAgentState =
+        state.geoAgent && typeof state.geoAgent === "object"
+          ? state.geoAgent
+          : null;
+      if (pendingOperaState) operaControl?.setState(pendingOperaState);
+      if (pendingGeoAgentState) geoAgentControl?.setState(pendingGeoAgentState);
+      return;
+    }
+
+    // Backward compatibility with projects saved before the GeoAgent companion
+    // control existed, where the plugin state was the OPERA control state.
     if (!isOperaState(state)) return false;
-    pendingState = state;
-    control?.setState(state);
+    pendingOperaState = state;
+    operaControl?.setState(state);
   },
 };
 

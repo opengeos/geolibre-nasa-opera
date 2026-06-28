@@ -1,0 +1,9 @@
+name = "geolibre-nasa-opera-titiler-cmr-proxy"
+main = "workers/titiler-cmr-proxy.js"
+compatibility_date = "2026-05-28"
+
+[vars]
+TITILER_CMR_UPSTREAM = "https://titiler-cmr.opengeos.org"
+# For production, replace "*" with a comma-separated allowlist such as:
+# ALLOWED_ORIGINS = "https://your-geolibre.example.com,http://localhost:5173"
+ALLOWED_ORIGINS = "*"

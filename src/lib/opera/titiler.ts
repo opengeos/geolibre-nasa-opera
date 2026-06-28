@@ -7,15 +7,47 @@
  * Earthdata credentials in the browser: it just requests a `tilejson.json` and
  * hands the returned XYZ tile template to GeoLibre.
  *
- * Default endpoint is the hosted staging service used by leafmap's
- * `113_titiler_cmr` notebook. It is a staging/demo deployment with no SLA; for
- * production, self-host titiler-cmr and override the endpoint in the panel.
+ * The runtime endpoint is configurable by the host, build environment, or the
+ * OPERA panel. A public staging titiler-cmr URL is retained only as a fallback
+ * for development and first-run demos.
  */
 
 import type { BBox, TitilerBackend } from "./types";
 
-export const DEFAULT_TITILER_CMR_ENDPOINT =
-  "https://staging.openveda.cloud/api/titiler-cmr";
+export const FALLBACK_TITILER_CMR_ENDPOINT =
+  "https://titiler-cmr.opengeos.org";
+
+const ENDPOINT_GLOBAL = "GEOLIBRE_NASA_OPERA_TITILER_CMR_ENDPOINT";
+
+export const DEFAULT_TITILER_CMR_ENDPOINT = resolveDefaultTitilerCmrEndpoint();
+
+export function resolveDefaultTitilerCmrEndpoint(override?: string): string {
+  return (
+    cleanEndpoint(override) ||
+    cleanEndpoint(readGlobalEndpoint()) ||
+    cleanEndpoint(readBuildEndpoint()) ||
+    FALLBACK_TITILER_CMR_ENDPOINT
+  );
+}
+
+function cleanEndpoint(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
+}
+
+function readGlobalEndpoint(): string | undefined {
+  return (globalThis as Record<string, unknown>)[ENDPOINT_GLOBAL] as
+    | string
+    | undefined;
+}
+
+function readBuildEndpoint(): string | undefined {
+  return (
+    import.meta as ImportMeta & {
+      env?: Record<string, string | undefined>;
+    }
+  ).env?.VITE_TITILER_CMR_ENDPOINT;
+}
 
 export interface TileJsonParams {
   /** Base titiler-cmr endpoint, no trailing slash. */
@@ -59,10 +91,165 @@ export interface TileJson {
   bounds?: number[];
   minzoom?: number;
   maxzoom?: number;
+  center?: number[];
 }
 
 /** TileMatrixSet id used for the XYZ tile grid. */
 const TILE_MATRIX_SET = "WebMercatorQuad";
+
+type QueryValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | Array<string | number | boolean>;
+
+/**
+ * Backend-neutral titiler-cmr render/query parameters. `assets`/`assetsRegex`
+ * target rasterio COG assets; `variables`/`group`/`sel` target xarray
+ * NetCDF/HDF5/Zarr datasets.
+ */
+export interface CmrBackendQueryParams {
+  /** Base titiler-cmr endpoint, no trailing slash. */
+  endpoint: string;
+  /** Reader backend: rasterio for COG/GeoTIFF, xarray for NetCDF/HDF5/Zarr. */
+  backend: TitilerBackend;
+  /** CMR collection concept-id. */
+  conceptId: string;
+  /** Optional exact CMR GranuleUR. */
+  granuleUr?: string;
+  /** Temporal filter, RFC3339 instant/range/list. */
+  temporal?: string;
+  /** Rasterio asset names, repeated as `assets=`. */
+  assets?: string[];
+  /** Rasterio asset regex. */
+  assetsRegex?: string;
+  /** Xarray variable names, repeated as `variables=`. */
+  variables?: string[];
+  /** Xarray group path, e.g. /science/LSAR/GCOV/grids/frequencyA. */
+  group?: string;
+  /** Xarray dimensional selection, JSON encoded when an object is provided. */
+  sel?: string | Record<string, unknown>;
+  /** One or more rescale values. Multiple entries are useful for RGB/expression output. */
+  rescale?: string | string[];
+  /** Named titiler colormap. */
+  colormapName?: string;
+  /** Explicit titiler colormap JSON string. */
+  colormap?: string;
+  /** Band/variable expression using b1, b2, ... */
+  expression?: string;
+  /** Optional minimum zoom passed through to tilejson endpoints. */
+  minzoom?: number;
+  /** Optional maximum zoom passed through to tilejson endpoints. */
+  maxzoom?: number;
+  /** Extra query params passed through as-is. */
+  extraParams?: Record<string, QueryValue>;
+}
+
+export interface CmrTimeseriesTileJsonParams extends CmrBackendQueryParams {
+  /** Time step as ISO-8601 duration, e.g. P1D, P1W, P1M. */
+  step?: string;
+  /** point = individual timestamps; interval = fixed-width intervals. */
+  temporalMode?: "point" | "interval";
+}
+
+export type TimeSeriesTileJson = Record<string, TileJson>;
+
+function appendValue(
+  query: URLSearchParams,
+  key: string,
+  value: QueryValue,
+): void {
+  if (value == null) return;
+  if (Array.isArray(value)) {
+    for (const item of value) query.append(key, String(item));
+  } else {
+    query.set(key, String(value));
+  }
+}
+
+function appendCommonCmrParams(
+  query: URLSearchParams,
+  params: CmrBackendQueryParams,
+): void {
+  query.set("collection_concept_id", params.conceptId);
+  if (params.granuleUr) query.set("granule_ur", params.granuleUr);
+  if (params.temporal) query.set("temporal", params.temporal);
+  for (const asset of params.assets ?? []) query.append("assets", asset);
+  if (params.assetsRegex) query.set("assets_regex", params.assetsRegex);
+  for (const variable of params.variables ?? []) {
+    query.append("variables", variable);
+  }
+  if (params.group) query.set("group", params.group);
+  if (params.sel) {
+    query.set(
+      "sel",
+      typeof params.sel === "string" ? params.sel : JSON.stringify(params.sel),
+    );
+  }
+  const rescaleValues = Array.isArray(params.rescale)
+    ? params.rescale
+    : params.rescale
+      ? [params.rescale]
+      : [];
+  for (const value of rescaleValues) query.append("rescale", value);
+  applyExpression(query, params.expression);
+  if (params.colormap) query.set("colormap", params.colormap);
+  if (params.colormapName) query.set("colormap_name", params.colormapName);
+  if (params.minzoom != null) query.set("minzoom", String(params.minzoom));
+  if (params.maxzoom != null) query.set("maxzoom", String(params.maxzoom));
+  for (const [key, value] of Object.entries(params.extraParams ?? {})) {
+    appendValue(query, key, value);
+  }
+}
+
+/** Build a backend-neutral tilejson URL for rasterio or xarray. */
+export function buildCmrTileJsonUrl(params: CmrBackendQueryParams): string {
+  const base = params.endpoint.replace(/\/+$/, "");
+  const query = new URLSearchParams();
+  appendCommonCmrParams(query, params);
+  return `${base}/${params.backend}/${TILE_MATRIX_SET}/tilejson.json?${query.toString()}`;
+}
+
+/** Build a backend-neutral point-query URL for rasterio or xarray. */
+export function buildCmrPointUrl(
+  params: CmrBackendQueryParams & { lon: number; lat: number },
+): string {
+  const base = params.endpoint.replace(/\/+$/, "");
+  const query = new URLSearchParams();
+  appendCommonCmrParams(query, params);
+  return `${base}/${params.backend}/point/${params.lon},${params.lat}?${query.toString()}`;
+}
+
+/** Build a backend-neutral statistics URL for rasterio or xarray. */
+export function buildCmrStatisticsUrl(
+  params: CmrBackendQueryParams & {
+    categorical?: boolean;
+    histogramBins?: number;
+  },
+): string {
+  const base = params.endpoint.replace(/\/+$/, "");
+  const query = new URLSearchParams();
+  appendCommonCmrParams(query, params);
+  if (params.categorical) query.set("categorical", "true");
+  else if (params.histogramBins) {
+    query.set("histogram_bins", String(params.histogramBins));
+  }
+  return `${base}/${params.backend}/statistics?${query.toString()}`;
+}
+
+/** Build a backend-neutral timeseries TileJSON URL. */
+export function buildCmrTimeseriesTileJsonUrl(
+  params: CmrTimeseriesTileJsonParams,
+): string {
+  const base = params.endpoint.replace(/\/+$/, "");
+  const query = new URLSearchParams();
+  appendCommonCmrParams(query, params);
+  if (params.step) query.set("step", params.step);
+  if (params.temporalMode) query.set("temporal_mode", params.temporalMode);
+  return `${base}/${params.backend}/timeseries/${TILE_MATRIX_SET}/tilejson.json?${query.toString()}`;
+}
 
 /**
  * Apply a band-math `expression` to a query. titiler evaluates expressions over
@@ -90,24 +277,19 @@ function applyExpression(query: URLSearchParams, expression?: string): void {
  * against the hosted staging endpoint.
  */
 export function buildTileJsonUrl(params: TileJsonParams): string {
-  const base = params.endpoint.replace(/\/+$/, "");
-  const query = new URLSearchParams();
-  query.set("collection_concept_id", params.conceptId);
-  if (params.granuleUr) query.set("granule_ur", params.granuleUr);
-  if (params.datetime) query.set("temporal", params.datetime);
-  for (const band of params.bands ?? []) query.append("assets", band);
-  if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
-  applyExpression(query, params.expression);
-  // An explicit categorical colormap wins over a min/max stretch; sending both
-  // would rescale the class values before indexing the colormap.
-  if (params.colormap) {
-    query.set("colormap", params.colormap);
-  } else {
-    if (params.rescale) query.set("rescale", params.rescale);
-    if (params.colormapName) query.set("colormap_name", params.colormapName);
-  }
-
-  return `${base}/${params.backend}/${TILE_MATRIX_SET}/tilejson.json?${query.toString()}`;
+  return buildCmrTileJsonUrl({
+    endpoint: params.endpoint,
+    conceptId: params.conceptId,
+    backend: params.backend,
+    temporal: params.datetime,
+    granuleUr: params.granuleUr,
+    assets: params.bands,
+    assetsRegex: params.bandsRegex,
+    rescale: params.colormap ? undefined : params.rescale,
+    colormapName: params.colormap ? undefined : params.colormapName,
+    colormap: params.colormap,
+    expression: params.expression,
+  });
 }
 
 /**
@@ -172,15 +354,18 @@ export interface PointResult {
  * granule/band being displayed. Verified live against the staging endpoint.
  */
 export function buildPointUrl(params: PointQueryParams): string {
-  const base = params.endpoint.replace(/\/+$/, "");
-  const query = new URLSearchParams();
-  query.set("collection_concept_id", params.conceptId);
-  if (params.granuleUr) query.set("granule_ur", params.granuleUr);
-  if (params.datetime) query.set("temporal", params.datetime);
-  for (const band of params.bands ?? []) query.append("assets", band);
-  if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
-  applyExpression(query, params.expression);
-  return `${base}/${params.backend}/point/${params.lon},${params.lat}?${query.toString()}`;
+  return buildCmrPointUrl({
+    endpoint: params.endpoint,
+    conceptId: params.conceptId,
+    backend: params.backend,
+    lon: params.lon,
+    lat: params.lat,
+    granuleUr: params.granuleUr,
+    temporal: params.datetime,
+    assets: params.bands,
+    assetsRegex: params.bandsRegex,
+    expression: params.expression,
+  });
 }
 
 /** Fetch a point pixel-value document from titiler-cmr. */
@@ -280,20 +465,18 @@ export interface StatisticsResult {
  * `categorical`. Verified live against the staging endpoint.
  */
 export function buildStatisticsUrl(params: StatisticsQueryParams): string {
-  const base = params.endpoint.replace(/\/+$/, "");
-  const query = new URLSearchParams();
-  query.set("collection_concept_id", params.conceptId);
-  if (params.granuleUr) query.set("granule_ur", params.granuleUr);
-  if (params.datetime) query.set("temporal", params.datetime);
-  for (const band of params.bands ?? []) query.append("assets", band);
-  if (params.bandsRegex) query.set("assets_regex", params.bandsRegex);
-  applyExpression(query, params.expression);
-  if (params.categorical) {
-    query.set("categorical", "true");
-  } else if (params.histogramBins) {
-    query.set("histogram_bins", String(params.histogramBins));
-  }
-  return `${base}/${params.backend}/statistics?${query.toString()}`;
+  return buildCmrStatisticsUrl({
+    endpoint: params.endpoint,
+    conceptId: params.conceptId,
+    backend: params.backend,
+    granuleUr: params.granuleUr,
+    temporal: params.datetime,
+    assets: params.bands,
+    assetsRegex: params.bandsRegex,
+    categorical: params.categorical,
+    histogramBins: params.histogramBins,
+    expression: params.expression,
+  });
 }
 
 /** Coerce an unknown JSON value to a finite number, or NaN. */
@@ -365,6 +548,35 @@ export async function fetchTileJson(url: string): Promise<TileJson> {
     throw new Error("titiler-cmr returned no tiles for this query");
   }
   return json;
+}
+
+/** Fetch arbitrary JSON from titiler-cmr. */
+export async function fetchTitilerJson<T = unknown>(
+  url: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`titiler-cmr request failed (${res.status})`);
+  }
+  return (await res.json()) as T;
+}
+
+/** Fetch a backend-neutral timeseries TileJSON document. */
+export async function fetchTimeSeriesTileJson(
+  url: string,
+): Promise<TimeSeriesTileJson> {
+  const json = await fetchTitilerJson<unknown>(url);
+  if (!json || typeof json !== "object" || Array.isArray(json)) {
+    throw new Error("titiler-cmr returned an invalid timeseries TileJSON");
+  }
+  return json as TimeSeriesTileJson;
 }
 
 /**

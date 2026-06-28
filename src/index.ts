@@ -6,6 +6,12 @@ export { OperaControl } from "./lib/core/OperaControl";
 export type {
   OperaControlOptions,
   OperaState,
+  OperaAgentChangeObservation,
+  OperaAgentChangeParams,
+  OperaAgentChangeResult,
+  OperaAgentDisplayParams,
+  OperaAgentResult,
+  OperaAgentSearchParams,
 } from "./lib/core/OperaControl";
 
 // OPERA data layer
@@ -17,7 +23,13 @@ export {
   getLayerBand,
 } from "./lib/opera/cmr";
 export {
+  buildCmrPointUrl,
+  buildCmrStatisticsUrl,
+  buildCmrTileJsonUrl,
+  buildCmrTimeseriesTileJsonUrl,
   buildTileJsonUrl,
+  fetchTimeSeriesTileJson,
+  fetchTitilerJson,
   fetchTileJson,
   granuleDatetime,
   tileJsonBounds,
