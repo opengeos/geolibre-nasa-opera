@@ -63,8 +63,8 @@ function createGeoAgentControl(): GeoAgentControl {
     storagePrefix: "geolibre.nasa-opera.geoagent",
     allowCodeExecutionDefault: pendingGeoAgentState?.allowCodeExecution ?? true,
     allowDestructiveToolsDefault:
-      pendingGeoAgentState?.allowDestructiveTools ?? false,
-    showPermissionToggles: true,
+      pendingGeoAgentState?.allowDestructiveTools ?? true,
+    showPermissionToggles: false,
     customSystemPrompt: OPERA_AGENT_SYSTEM_PROMPT,
     customTools: () => createOperaAgentTools(() => operaControl),
   });
@@ -111,7 +111,7 @@ function isNasaOperaProjectState(
 export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
-  version: "0.2.2",
+  version: "0.2.3",
   activate(app) {
     operaControl = operaControl ?? createControl(app);
     const added = app.addMapControl(operaControl, position);
