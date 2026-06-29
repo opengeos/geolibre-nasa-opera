@@ -63,7 +63,7 @@ export default defineConfig({
     },
     cssCodeSplit: false,
     sourcemap: false,
-    minify: false,
+    minify: "oxc",
   },
   // plugins: [bundlePluginAssets()], // enable with the recipe above
 });
