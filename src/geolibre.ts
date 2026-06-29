@@ -14,8 +14,8 @@ import {
   createOperaAgentTools,
   OPERA_AGENT_SYSTEM_PROMPT,
 } from "./lib/opera/agent-tools";
-import "./lib/styles/plugin-control.css";
 import "maplibre-gl-geoagent/style.css";
+import "./lib/styles/plugin-control.css";
 
 // This plugin owns two MapLibre controls: the OPERA search panel and a
 // companion GeoAgent chat panel. Use the structural control type for host calls.
@@ -111,7 +111,7 @@ function isNasaOperaProjectState(
 export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
-  version: "0.2.3",
+  version: "0.2.4",
   activate(app) {
     operaControl = operaControl ?? createControl(app);
     const added = app.addMapControl(operaControl, position);
