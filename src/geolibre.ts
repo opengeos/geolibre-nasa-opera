@@ -111,7 +111,7 @@ function isNasaOperaProjectState(
 export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
-  version: "0.2.1",
+  version: "0.2.2",
   activate(app) {
     operaControl = operaControl ?? createControl(app);
     const added = app.addMapControl(operaControl, position);
