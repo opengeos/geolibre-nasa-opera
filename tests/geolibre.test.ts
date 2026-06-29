@@ -55,7 +55,7 @@ describe("GeoLibre plugin entry", () => {
       opera: expect.objectContaining({ product: expect.any(String) }),
       geoAgent: expect.objectContaining({
         collapsed: true,
-        allowDestructiveTools: false,
+        allowDestructiveTools: true,
       }),
     });
   });

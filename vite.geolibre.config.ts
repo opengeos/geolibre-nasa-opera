@@ -55,6 +55,10 @@ export default defineConfig({
       external: [],
       output: {
         assetFileNames: () => "style.css",
+        // GeoLibre imports registry plugins from a generated module URL, so
+        // relative chunk imports such as ./GeoAgentControl-*.js cannot resolve.
+        // Keep the external plugin entry self-contained.
+        codeSplitting: false,
       },
     },
     cssCodeSplit: false,
