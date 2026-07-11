@@ -50,6 +50,21 @@ import type {
   GranuleBand,
   OperaGranule,
 } from "../opera/types";
+import {
+  lockBenchmark,
+  summarizeBenchmark,
+  type BenchmarkEvent,
+  type BenchmarkRender,
+  type BenchmarkSummary,
+  type LockedBenchmark,
+} from "../opera/benchmark";
+import { fetchOsmBuildings } from "../opera/buildings";
+import { buildingsInFlood, type GeoFeatureCollection } from "../opera/geometry";
+import { searchNews, type NewsResult } from "../opera/news";
+import {
+  buildOnePagerHtml,
+  type OnePagerImpact,
+} from "../opera/one-pager";
 
 /**
  * Persisted state for the OPERA control. Saved with the GeoLibre project via the
@@ -75,6 +90,11 @@ export interface OperaState {
   expression: string;
   /** titiler-cmr endpoint. */
   endpoint: string;
+  /**
+   * The human-QAed flood benchmark locked as the agent's authoritative
+   * boundary. Persisted with the project so a locked benchmark survives reloads.
+   */
+  benchmark?: LockedBenchmark;
 }
 
 /** Host capabilities the control needs, bound by the GeoLibre wrapper. */
@@ -254,7 +274,80 @@ export interface OperaAgentTileLayerParams {
   fitBounds?: boolean;
 }
 
+/** Result of `getBenchmarkForAgent` / benchmark-gated tools. */
+export interface OperaAgentBenchmarkResult {
+  ok: boolean;
+  status: string;
+  benchmark?: BenchmarkSummary;
+}
+
+export interface OperaAgentBuildingsParams {
+  /** Ancillary building source. Only "osm" (Overpass) is supported in v1. */
+  buildingSource?: "osm";
+  /** Draw the flooded buildings as a map layer. */
+  addLayer?: boolean;
+  /** Also sum the flooded buildings' footprint area (km²). */
+  computeArea?: boolean;
+}
+
+export interface OperaAgentBuildingsResult {
+  ok: boolean;
+  status: string;
+  /** Buildings tested within the benchmark bbox. */
+  total: number;
+  /** Buildings whose centroid falls inside the flood water polygon. */
+  floodedCount: number;
+  /** floodedCount / total. */
+  fraction: number;
+  floodedAreaKm2?: number;
+  source: string;
+  layerId?: string;
+}
+
+export interface OperaAgentNewsParams {
+  /** Search query, e.g. "Valencia flood October 2024 deaths damages". */
+  query: string;
+  /** Max results to return (1-20). */
+  maxResults?: number;
+}
+
+export interface OperaAgentNewsResult {
+  ok: boolean;
+  status: string;
+  results: NewsResult[];
+  answer?: string;
+}
+
+export interface OperaAgentOnePagerParams {
+  title?: string;
+  narrative?: string;
+  impacts?: OnePagerImpact[];
+  buildings?: {
+    floodedCount: number;
+    total: number;
+    fraction: number;
+    floodedAreaKm2?: number;
+    source?: string;
+  };
+  /** Map PNG data URL; when omitted the control captures the current map. */
+  mapSnapshotDataUrl?: string;
+  /** Download the generated HTML (default true). */
+  download?: boolean;
+}
+
+export interface OperaAgentOnePagerResult {
+  ok: boolean;
+  status: string;
+  filename?: string;
+  /** The generated self-contained HTML document. */
+  html?: string;
+}
+
 const PANEL_CLASS = "plugin-control-panel opera-panel";
+
+/** Message returned by benchmark-gated agent tools when none is locked. */
+const BENCHMARK_REQUIRED =
+  "No benchmark is locked. Import and lock a QAed flood water-extent GeoJSON first (Benchmark section in the OPERA panel).";
 
 // Self-managed map overlay for highlighting the selected footprint. These ids
 // are not touched by GeoLibre's layer-sync (which only prunes its own
@@ -377,6 +470,9 @@ export class OperaControl implements IControl {
   private _statsBtn?: HTMLButtonElement;
   private _statsPanel?: HTMLElement;
 
+  // Benchmark import UI.
+  private _benchmarkStatus?: HTMLElement;
+
   constructor(options: OperaControlOptions = {}) {
     this._options = options;
     const { start, end } = defaultDateRange();
@@ -406,12 +502,22 @@ export class OperaControl implements IControl {
     this._mapContainer.appendChild(this._panel);
     this._attachMapInteractions();
     this._setupFloatingListeners();
+    this._restoreBenchmarkLayer();
 
     if (!this._state.collapsed) {
       this._panel.classList.add("expanded");
       requestAnimationFrame(() => this._updatePanelPosition());
     }
     return this._container;
+  }
+
+  /**
+   * Redraw a benchmark restored from saved project state onto the map. The
+   * benchmark itself persists in `OperaState`, but its map layer is host-owned
+   * and not restored automatically, so re-add it when the control (re)mounts.
+   */
+  private _restoreBenchmarkLayer(): void {
+    if (this._state.benchmark) this._addBenchmarkLayer(this._state.benchmark);
   }
 
   onRemove(): void {
@@ -454,6 +560,7 @@ export class OperaControl implements IControl {
       this._renderRows();
       this._refreshSelectionUI();
     }
+    this._restoreBenchmarkLayer();
     if (this._lastStatus) this._setStatus(this._lastStatus);
   }
 
@@ -510,6 +617,7 @@ export class OperaControl implements IControl {
     this._inspectBtn = undefined;
     this._statsBtn = undefined;
     this._statsPanel = undefined;
+    this._benchmarkStatus = undefined;
   }
 
   // --- State -------------------------------------------------------------
@@ -558,6 +666,7 @@ export class OperaControl implements IControl {
     bbox: string;
     start: string;
     end: string;
+    benchmark: BenchmarkSummary | null;
   } {
     this._readForm();
     return {
@@ -575,6 +684,9 @@ export class OperaControl implements IControl {
         description: p.description,
       })),
       granules: this._agentGranuleSummaries(),
+      benchmark: this._state.benchmark
+        ? summarizeBenchmark(this._state.benchmark)
+        : null,
     };
   }
 
@@ -1046,6 +1158,219 @@ export class OperaControl implements IControl {
       format,
       content,
     };
+  }
+
+  // --- Benchmark (human-QAed authoritative flood extent) -----------------
+
+  /** The locked benchmark, or null. */
+  getBenchmark(): LockedBenchmark | null {
+    return this._state.benchmark ?? null;
+  }
+
+  /**
+   * Import + lock a QAed flood benchmark from parsed GeoJSON. Adds the water
+   * polygon to the map, fits the view, and stores it as the agent's boundary.
+   */
+  lockBenchmarkFromGeoJson(
+    rawGeoJson: unknown,
+    event: BenchmarkEvent,
+    render?: BenchmarkRender,
+  ): OperaAgentBenchmarkResult {
+    let benchmark: LockedBenchmark;
+    try {
+      benchmark = lockBenchmark(rawGeoJson, {
+        event,
+        render,
+        lockedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      const status = err instanceof Error ? err.message : String(err);
+      this._setStatus(status);
+      return { ok: false, status };
+    }
+    this._state.benchmark = benchmark;
+    this._addBenchmarkLayer(benchmark);
+    this._options.fitBounds?.(benchmark.bbox);
+    this._updateBenchmarkStatus();
+    const status = `Locked benchmark "${benchmark.event.name}" (${benchmark.areaKm2.toFixed(2)} km²).`;
+    this._setStatus(status);
+    return { ok: true, status, benchmark: summarizeBenchmark(benchmark) };
+  }
+
+  /** Remove the locked benchmark. */
+  clearBenchmark(): void {
+    this._state.benchmark = undefined;
+    this._updateBenchmarkStatus();
+    this._setStatus("Benchmark cleared.");
+  }
+
+  /** Agent-facing benchmark summary, or an ok:false prompt to import one. */
+  getBenchmarkForAgent(): OperaAgentBenchmarkResult {
+    const benchmark = this._state.benchmark;
+    if (!benchmark) return { ok: false, status: BENCHMARK_REQUIRED };
+    return {
+      ok: true,
+      status: `Benchmark "${benchmark.event.name}" is locked (${benchmark.areaKm2.toFixed(2)} km²).`,
+      benchmark: summarizeBenchmark(benchmark),
+    };
+  }
+
+  private _addBenchmarkLayer(benchmark: LockedBenchmark): void {
+    this._options.addGeoJsonLayer?.(`Benchmark — ${benchmark.event.name}`, {
+      type: "FeatureCollection",
+      features: benchmark.water.features,
+    });
+  }
+
+  /**
+   * Intersect the locked benchmark water polygon with OSM building footprints
+   * (Overpass) to quantify building exposure within the flooded area.
+   */
+  async buildingsInFloodForAgent(
+    params: OperaAgentBuildingsParams = {},
+  ): Promise<OperaAgentBuildingsResult> {
+    const benchmark = this._state.benchmark;
+    if (!benchmark) {
+      return {
+        ok: false,
+        status: BENCHMARK_REQUIRED,
+        total: 0,
+        floodedCount: 0,
+        fraction: 0,
+        source: "osm",
+      };
+    }
+    this.expand();
+    this._setStatus("Fetching OSM buildings for the flooded area…");
+    let buildings: GeoFeatureCollection;
+    try {
+      buildings = await fetchOsmBuildings(benchmark.bbox);
+    } catch (err) {
+      const status = `Building fetch failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+      this._setStatus(status);
+      return {
+        ok: false,
+        status,
+        total: 0,
+        floodedCount: 0,
+        fraction: 0,
+        source: "osm",
+      };
+    }
+    const result = buildingsInFlood(buildings, benchmark.water, {
+      computeArea: params.computeArea,
+    });
+    let layerId: string | undefined;
+    if (params.addLayer && result.floodedFeatures.length > 0) {
+      layerId = `Flooded buildings — ${benchmark.event.name}`;
+      this._options.addGeoJsonLayer?.(layerId, {
+        type: "FeatureCollection",
+        features: result.floodedFeatures,
+      });
+    }
+    const status = `Found ${result.floodedCount} building(s) within the flood extent (${(
+      result.fraction * 100
+    ).toFixed(1)}% of ${result.total} in view).`;
+    this._setStatus(status);
+    return {
+      ok: true,
+      status,
+      total: result.total,
+      floodedCount: result.floodedCount,
+      fraction: result.fraction,
+      floodedAreaKm2: result.floodedAreaKm2,
+      source: "OpenStreetMap (Overpass)",
+      layerId,
+    };
+  }
+
+  /** Search reputable news for quantified, citable impact figures. */
+  async newsImpactSearchForAgent(
+    params: OperaAgentNewsParams,
+  ): Promise<OperaAgentNewsResult> {
+    const query = params.query?.trim();
+    if (!query) return { ok: false, status: "Provide a search query.", results: [] };
+    this._setStatus("Searching news for impact figures…");
+    try {
+      const { results, answer } = await searchNews(query, {
+        maxResults: params.maxResults,
+      });
+      const status = `Found ${results.length} news result(s).`;
+      this._setStatus(status);
+      return { ok: true, status, results, answer };
+    } catch (err) {
+      const status = `News search failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+      this._setStatus(status);
+      return { ok: false, status, results: [] };
+    }
+  }
+
+  /**
+   * Capture the current map as a PNG data URL. Uses a one-shot render after
+   * `triggerRepaint()` so real pixels are read even when the map was created
+   * without `preserveDrawingBuffer`. Returns null when no map is attached.
+   */
+  async captureMapSnapshotForAgent(): Promise<string | null> {
+    const map = this._map;
+    if (!map) return null;
+    return new Promise<string | null>((resolve) => {
+      try {
+        map.once("render", () => {
+          try {
+            resolve(map.getCanvas().toDataURL("image/png"));
+          } catch {
+            resolve(null);
+          }
+        });
+        map.triggerRepaint();
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  /**
+   * Assemble the self-contained one-pager HTML from the locked benchmark plus
+   * agent-supplied narrative, buildings exposure, and cited impacts; captures a
+   * map snapshot when one is not supplied and downloads the result.
+   */
+  async buildOnePagerForAgent(
+    params: OperaAgentOnePagerParams = {},
+  ): Promise<OperaAgentOnePagerResult> {
+    const benchmark = this._state.benchmark;
+    if (!benchmark) return { ok: false, status: BENCHMARK_REQUIRED };
+    const mapImageDataUrl =
+      params.mapSnapshotDataUrl ??
+      (await this.captureMapSnapshotForAgent()) ??
+      undefined;
+    const html = buildOnePagerHtml({
+      title: params.title ?? `${benchmark.event.name}: OPERA flood assessment`,
+      event: benchmark.event,
+      narrative: params.narrative,
+      mapImageDataUrl,
+      benchmark: {
+        bbox: benchmark.bbox,
+        areaKm2: benchmark.areaKm2,
+        render: benchmark.render,
+      },
+      buildings: params.buildings,
+      impacts: params.impacts,
+      generatedAt: new Date().toISOString().slice(0, 10),
+      credit: "NASA OPERA · GeoLibre",
+    });
+    const filename = `opera-one-pager-${slug(benchmark.event.name) || "flood"}.html`;
+    if (params.download !== false) {
+      this._downloadTextFile(filename, html, "text/html");
+    }
+    const status = `One-pager ready${
+      params.download !== false ? " and downloaded" : ""
+    }.`;
+    this._setStatus(status);
+    return { ok: true, status, filename, html };
   }
 
   private _addChangeSummaryLayer(
@@ -1684,6 +2009,7 @@ export class OperaControl implements IControl {
     const content = document.createElement("div");
     content.className = "plugin-control-content";
 
+    content.appendChild(this._buildBenchmarkGroup());
     content.appendChild(this._buildProductGroup());
     content.appendChild(this._buildBBoxGroup());
     content.appendChild(this._buildDateGroup());
@@ -1718,6 +2044,71 @@ export class OperaControl implements IControl {
 
     this._content = content;
     return content;
+  }
+
+  /**
+   * Benchmark import section: load a human-QAed flood water-extent GeoJSON and
+   * lock it as the authoritative boundary the agent operates within.
+   */
+  private _buildBenchmarkGroup(): HTMLElement {
+    const group = el("div", "plugin-control-group opera-benchmark");
+    const row = el("div", "opera-label-row");
+    row.appendChild(label("Flood benchmark (QAed)"));
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "opera-link-button";
+    clearBtn.textContent = "Clear";
+    clearBtn.addEventListener("click", () => this.clearBenchmark());
+    row.appendChild(clearBtn);
+    group.appendChild(row);
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".geojson,.json,application/geo+json,application/json";
+    fileInput.style.display = "none";
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files?.[0];
+      if (file) void this._importBenchmarkFile(file);
+      fileInput.value = "";
+    });
+
+    const importBtn = document.createElement("button");
+    importBtn.type = "button";
+    importBtn.className = "plugin-control-button opera-secondary-button opera-block-button";
+    importBtn.textContent = "Import benchmark…";
+    importBtn.title = "Load a QAed flood water-extent GeoJSON and lock it as ground truth";
+    importBtn.addEventListener("click", () => fileInput.click());
+    group.append(importBtn, fileInput);
+
+    const status = el("div", "opera-benchmark-status");
+    this._benchmarkStatus = status;
+    group.appendChild(status);
+    this._updateBenchmarkStatus();
+    return group;
+  }
+
+  /** Read a benchmark file, parse GeoJSON, and lock it. */
+  private async _importBenchmarkFile(file: File): Promise<void> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      this._setStatus("Benchmark file is not valid JSON.");
+      return;
+    }
+    // Default the event name to the file name; the agent/one-pager can override
+    // the display title, location, and date.
+    const name = file.name.replace(/\.[^.]+$/, "");
+    this.lockBenchmarkFromGeoJson(parsed, { name });
+  }
+
+  /** Reflect the locked benchmark (or absence) in the panel status line. */
+  private _updateBenchmarkStatus(): void {
+    if (!this._benchmarkStatus) return;
+    const benchmark = this._state.benchmark;
+    this._benchmarkStatus.textContent = benchmark
+      ? `Locked: ${benchmark.event.name} — ${benchmark.areaKm2.toFixed(2)} km²`
+      : "No benchmark locked.";
   }
 
   private _buildProductGroup(): HTMLElement {

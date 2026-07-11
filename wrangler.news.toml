@@ -1,0 +1,13 @@
+name = "geolibre-nasa-opera-news-proxy"
+main = "workers/news-proxy.js"
+compatibility_date = "2026-05-28"
+
+[vars]
+# For production, replace "*" with a comma-separated allowlist such as:
+# ALLOWED_ORIGINS = "https://your-geolibre.example.com,http://localhost:5173"
+ALLOWED_ORIGINS = "*"
+
+# The Tavily API key is a SECRET, never a var. Set it with:
+#   npx wrangler secret put TAVILY_API_KEY --config wrangler.news.toml
+# Then point the plugin at the deployed Worker via VITE_NEWS_PROXY_ENDPOINT
+# (build var) or the GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT window global.

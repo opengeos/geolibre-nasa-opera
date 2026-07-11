@@ -20,11 +20,19 @@ import "../src/index.css";
 
 type GeoJsonData = Parameters<maplibregl.GeoJSONSource["setData"]>[0];
 
+// Bundled OpenAI key (from OPENAI_API_KEY at build time; empty when unset).
+const BUNDLED_OPENAI_API_KEY =
+  typeof __OPERA_OPENAI_API_KEY__ === "string"
+    ? __OPERA_OPENAI_API_KEY__.trim()
+    : "";
+
 const map = new maplibregl.Map({
   container: "map",
   style: "https://tiles.openfreemap.org/styles/positron",
   center: [-121.9, 38.0],
   zoom: 6,
+  // Let the one-pager capture real map pixels via getCanvas().toDataURL().
+  preserveDrawingBuffer: true,
 });
 
 map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -86,6 +94,9 @@ map.on("load", () => {
       title: "OPERA GeoAgent",
       collapsed: true,
       panelWidth: 410,
+      ...(BUNDLED_OPENAI_API_KEY
+        ? { apiKeys: { "openai-responses": BUNDLED_OPENAI_API_KEY } }
+        : {}),
       storagePrefix: "geolibre.nasa-opera.geoagent",
       allowCodeExecutionDefault: true,
       allowDestructiveToolsDefault: true,

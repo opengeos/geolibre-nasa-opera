@@ -83,8 +83,22 @@ function createControl(app: AppAPI): OperaControl {
   return next;
 }
 
+/**
+ * OpenAI key optionally bundled at build time from `OPENAI_API_KEY` (via a Vite
+ * `define`; empty when not set). When present it prefills the GeoAgent so users
+ * need not enter a key. A key saved in the panel/sessionStorage still takes
+ * precedence, so users can override the bundled key. See src/vite-env.d.ts.
+ */
+const BUNDLED_OPENAI_API_KEY =
+  typeof __OPERA_OPENAI_API_KEY__ === "string"
+    ? __OPERA_OPENAI_API_KEY__.trim()
+    : "";
+
 function createGeoAgentControl(): GeoAgentControl {
   const next = new GeoAgentControl({
+    ...(BUNDLED_OPENAI_API_KEY
+      ? { apiKeys: { "openai-responses": BUNDLED_OPENAI_API_KEY } }
+      : {}),
     collapsed: pendingGeoAgentState?.collapsed ?? true,
     panelWidth: pendingGeoAgentState?.panelWidth ?? 410,
     panelHeight: pendingGeoAgentState?.panelHeight,

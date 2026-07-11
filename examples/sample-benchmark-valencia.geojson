@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "class": "flood water", "note": "PLACEHOLDER extent for testing — replace with the QAed benchmark" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-0.44, 39.36],
+            [-0.34, 39.35],
+            [-0.32, 39.40],
+            [-0.36, 39.45],
+            [-0.42, 39.44],
+            [-0.45, 39.40],
+            [-0.44, 39.36]
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -48,6 +48,8 @@
     "serve:geolibre": "node scripts/serve-geolibre-plugin.mjs",
     "proxy:dev": "wrangler dev --local --port 8787",
     "proxy:deploy": "wrangler deploy",
+    "news-proxy:dev": "wrangler dev --local --port 8788 --config wrangler.news.toml",
+    "news-proxy:deploy": "wrangler deploy --config wrangler.news.toml",
     "preview": "vite preview",
     "test": "vitest --run",
     "test:ui": "vitest --ui",

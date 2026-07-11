@@ -9,6 +9,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // index.html directly.
 export default defineConfig({
   base: "/geolibre-nasa-opera/",
+  // Optionally bundle the OpenAI key from the build environment (opt-in) so the
+  // deployed demo starts without a manual key prompt. See src/vite-env.d.ts for
+  // the security caveat.
+  define: {
+    __OPERA_OPENAI_API_KEY__: JSON.stringify(process.env.OPENAI_API_KEY ?? ""),
+  },
   build: {
     outDir: "dist-examples",
     rollupOptions: {

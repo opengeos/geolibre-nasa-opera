@@ -59,6 +59,14 @@ export default defineConfig({
       "@": resolve(__dirname, "src"),
     },
   },
+  // Optionally bundle the OpenAI key from the build environment so end users of
+  // the shipped GeoLibre plugin do not have to enter one. OPT-IN: only set when
+  // OPENAI_API_KEY is exported at build time; default OFF. Bundling exposes the
+  // key to anyone who loads the app, so use only for controlled/sponsor demos.
+  // See src/vite-env.d.ts and src/geolibre.ts.
+  define: {
+    __OPERA_OPENAI_API_KEY__: JSON.stringify(process.env.OPENAI_API_KEY ?? ""),
+  },
   build: {
     lib: {
       entry: resolve(__dirname, "src/geolibre.ts"),

@@ -211,6 +211,60 @@ for production. JavaScript execution is available for local MapLibre tasks;
 destructive layer-removal tools start disabled and can be enabled in the
 GeoAgent permission toggles.
 
+### Bundling the LLM API key (optional)
+
+So end users don't have to enter an API key, the OpenAI key can be baked into the
+build from the `OPENAI_API_KEY` environment variable:
+
+```bash
+export OPENAI_API_KEY=sk-...
+npm run build:geolibre    # or: npm run dev
+```
+
+When set, the key is passed to the GeoAgent's `apiKeys` option and the panel
+starts ready to chat; a key the user later enters (saved in `sessionStorage`)
+still takes precedence. When `OPENAI_API_KEY` is unset (the default), nothing is
+bundled and the panel falls back to manual key entry.
+
+> **Security:** bundling a key ships it to every browser that loads the app.
+> Use this only for controlled/sponsor demo deployments. For public deployments,
+> leave it unset and put the key behind a server-side proxy.
+
+## Constrained flood one-pager workflow
+
+A supervised, human-in-the-loop workflow that turns a human-QAed flood map into a
+shareable one-pager, designed so the agent cannot hallucinate the authoritative
+map or uncited impact numbers:
+
+1. **Import a benchmark.** In the OPERA panel's **Flood benchmark** section,
+   import a QAed flood water-extent GeoJSON (`Polygon`/`MultiPolygon`). It is
+   *locked* as the authoritative ground truth and drawn on the map. A sample
+   placeholder is at [`examples/sample-benchmark-valencia.geojson`](examples/sample-benchmark-valencia.geojson)
+   — replace it with your real, QAed extent.
+2. **Ask the agent.** With a benchmark locked, the GeoAgent is constrained to it:
+   - `buildings_in_flood` intersects the benchmark with OSM building footprints
+     (via the public Overpass API — no proxy needed) to quantify exposure.
+   - `news_impact_search` returns quantified impact figures **with source URLs +
+     dates**; the agent is instructed to report only citable numbers.
+   - `build_one_pager` assembles a self-contained HTML one-pager (map snapshot +
+     legend/scale bar + building exposure + cited impacts + narrative) and
+     downloads it. It is print/PDF-ready and screenshots cleanly for social.
+
+### News search proxy (Tavily)
+
+`news_impact_search` calls the Tavily search API through a small Cloudflare
+Worker so the Tavily key stays server-side (`workers/news-proxy.js`):
+
+```bash
+npx wrangler secret put TAVILY_API_KEY --config wrangler.news.toml
+npm run news-proxy:deploy      # or: npm run news-proxy:dev  (local, port 8788)
+```
+
+Point the plugin at the deployed Worker with the `VITE_NEWS_PROXY_ENDPOINT`
+build variable, or the `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` window global.
+Without it, `news_impact_search` returns a clear "not configured" message and the
+rest of the workflow (benchmark, buildings, one-pager) still works.
+
 ## Build and install
 
 ```bash
