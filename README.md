@@ -65,6 +65,23 @@ The plugin only calls `app.addGeoJsonLayer` (footprints) and
 `app.registerExternalNativeLayer` with a `type: "raster"` tile source (COG tiles)
 through the GeoLibre host API, so the layers appear in the normal layer panel.
 
+## Panel modes
+
+The OPERA search UI can render in one of two modes, switchable at runtime from
+the **NASA OPERA** menu in the top toolbar (Dock panel / Float panel):
+
+- **Docked** (default) — a native right-sidebar panel the host renders and
+  manages (via `app.registerRightPanel`), docked beside GeoLibre's built-in
+  Style panel. This is the default for a fresh activation.
+- **Floating** — the original draggable card overlaid on the map (a MapLibre
+  control). Projects saved before docking existed reopen in this mode, so
+  existing layouts are unchanged.
+
+The chosen mode is persisted with the GeoLibre project (`panelMode`). On hosts
+without a right sidebar, the plugin falls back to the floating panel
+automatically. The OPERA GeoAgent chat companion is always a floating control in
+both modes.
+
 ## titiler-cmr endpoint
 
 The endpoint is user-editable in the OPERA panel. The first-run default can be

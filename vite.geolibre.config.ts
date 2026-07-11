@@ -4,6 +4,22 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * True when a build warning/log originates in the third-party GeoAgent
+ * dependency chain (maplibre-gl-geoagent + @strands-agents/sdk) and is not
+ * actionable from this repo: Node built-ins stubbed for the browser, and Google
+ * Closure's direct `eval`. Used to keep those out of the build output while
+ * still surfacing warnings from this plugin's own code.
+ */
+function isDependencyBuildNoise(entry: { message?: string } | string): boolean {
+  const message = typeof entry === "string" ? entry : (entry?.message ?? "");
+  return (
+    message.includes("has been externalized for browser compatibility") ||
+    message.includes("Use of direct `eval`") ||
+    (message.includes("eval") && message.includes("maplibre-gl-geoagent"))
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Recipe: bundle plugin-local assets into the GeoLibre dist/ folder
 // ---------------------------------------------------------------------------
@@ -53,6 +69,23 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       external: [],
+      // Silence build noise that originates entirely in third-party GeoAgent
+      // dependencies we do not control and cannot fix here:
+      //  - @strands-agents/sdk imports Node built-ins (fs/path/node:*) that Vite
+      //    stubs for the browser; those code paths are never reached in the
+      //    plugin, so the "externalized for browser compatibility" notes are
+      //    expected.
+      //  - maplibre-gl-geoagent bundles Google Closure, which uses direct
+      //    `eval`, tripping the minifier's EVAL warning.
+      // Warnings from this plugin's own sources still surface normally.
+      onwarn(warning, defaultHandler) {
+        if (isDependencyBuildNoise(warning)) return;
+        defaultHandler(warning);
+      },
+      onLog(level, log, defaultHandler) {
+        if (isDependencyBuildNoise(log)) return;
+        defaultHandler(level, log);
+      },
       output: {
         assetFileNames: () => "style.css",
         // GeoLibre imports registry plugins from a generated module URL, so

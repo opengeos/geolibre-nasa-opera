@@ -87,6 +87,89 @@ export interface GeoLibreNativeLayerRegistration {
 }
 
 /**
+ * Registration payload passed to {@link GeoLibreAppAPI.registerRightPanel}. The
+ * host renders a native right-sidebar panel (header with collapse/close buttons,
+ * a collapsible rail, and a resize handle) and the plugin owns only the body via
+ * {@link render}. While a plugin right panel is the active right-side workspace
+ * the host collapses its built-in Style panel and restores it when the plugin
+ * panel closes, so the two never compete for space.
+ */
+export interface GeoLibreRightPanelRegistration {
+  /** Stable, plugin-unique id used to open/collapse/close the panel. */
+  id: string;
+  /** Title shown in the panel header and the collapsed rail. */
+  title: string;
+  /** Optional rail icon: a URL or `data:` URI rendered as an image. */
+  icon?: string;
+  /** Preferred expanded width in px (desktop only; the host clamps it). */
+  defaultWidth?: number;
+  /**
+   * Populate the panel body. Called with an empty container the plugin fills
+   * with its own DOM (the contract is plain DOM, so a plugin never has to share
+   * the host's UI framework). May return a cleanup function the host runs when
+   * the panel closes or is unregistered.
+   */
+  render: (container: HTMLElement) => void | (() => void);
+  /** Called after the panel opens (becomes the active workspace). */
+  onOpen?: () => void;
+  /** Called after the panel collapses to its rail. */
+  onCollapse?: () => void;
+  /** Called after the panel closes (releases the workspace). */
+  onClose?: () => void;
+}
+
+/**
+ * An action item in a plugin {@link GeoLibreToolbarMenu}. Selecting it runs
+ * {@link onSelect} (for example, to open or re-dock the plugin panel).
+ */
+export interface GeoLibreToolbarMenuAction {
+  /** Discriminator; defaults to "action" when omitted. */
+  type?: "action";
+  /** Stable id, unique within the menu. */
+  id: string;
+  /** Label shown in the menu. */
+  label: string;
+  /** Optional icon: a URL or `data:` URI rendered as an image. */
+  icon?: string;
+  /** When true, the item is shown disabled and cannot be selected. */
+  disabled?: boolean;
+  /** Invoked when the user selects the item. */
+  onSelect: () => void;
+}
+
+/** A nested submenu in a plugin {@link GeoLibreToolbarMenu}. */
+export interface GeoLibreToolbarSubmenu {
+  type: "submenu";
+  id: string;
+  label: string;
+  icon?: string;
+  items: GeoLibreToolbarMenuItem[];
+}
+
+/** A divider between groups of items in a plugin toolbar menu. */
+export interface GeoLibreToolbarSeparator {
+  type: "separator";
+  id?: string;
+}
+
+/** One entry in a plugin toolbar menu: an action, a submenu, or a separator. */
+export type GeoLibreToolbarMenuItem =
+  | GeoLibreToolbarMenuAction
+  | GeoLibreToolbarSubmenu
+  | GeoLibreToolbarSeparator;
+
+/**
+ * A plugin-owned top-level toolbar menu. The host renders it as a dropdown
+ * button in the banner beside the built-in menus.
+ */
+export interface GeoLibreToolbarMenu {
+  id: string;
+  label: string;
+  icon?: string;
+  items: GeoLibreToolbarMenuItem[];
+}
+
+/**
  * Structural type for a MapLibre control instance. A marker interface keeps this
  * contract independent of the concrete control implementation.
  */
@@ -148,6 +231,37 @@ export interface GeoLibreAppAPI<TControl extends GeoLibreControl = GeoLibreContr
   ) => void;
   /** Remove a native layer previously registered with the given id. */
   unregisterExternalNativeLayer?: (id: string) => void;
+  /**
+   * Register a native right-sidebar panel that docks beside the host's built-in
+   * Style panel. Returns an unregister function (call it from `deactivate`). The
+   * panel is not shown until {@link openRightPanel} is called. Present only on
+   * hosts with a right sidebar (for example, GeoLibre Desktop and the web app).
+   * See {@link GeoLibreRightPanelRegistration}.
+   */
+  registerRightPanel?: (panel: GeoLibreRightPanelRegistration) => () => void;
+  /** Remove a previously registered right panel (closing it if active). */
+  unregisterRightPanel?: (id: string) => void;
+  /**
+   * Make the panel the active right-side workspace and expand it. Returns
+   * `false` if no panel with that id is registered. Re-opening a collapsed panel
+   * expands it.
+   */
+  openRightPanel?: (id: string) => boolean;
+  /** Collapse the active right panel to its rail without closing it. */
+  collapseRightPanel?: (id: string) => void;
+  /** Close the active right panel and restore the host's Style panel. */
+  closeRightPanel?: (id: string) => void;
+  /** Id of the active right-side workspace panel, or `null` when none is open. */
+  getActiveRightPanel?: () => string | null;
+  /**
+   * Register a top-level toolbar menu in the host banner, with nested submenus
+   * and action items. Returns an unregister function (call it from
+   * `deactivate`). Re-registering the same id replaces the menu. See
+   * {@link GeoLibreToolbarMenu}.
+   */
+  registerToolbarMenu?: (menu: GeoLibreToolbarMenu) => () => void;
+  /** Remove a previously registered toolbar menu. */
+  unregisterToolbarMenu?: (id: string) => void;
 }
 
 /**
