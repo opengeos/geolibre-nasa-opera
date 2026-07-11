@@ -98,6 +98,12 @@ export interface OperaControlOptions {
   getMapBounds?: () => BBox | null;
   /** Initial titiler-cmr endpoint. Overrides runtime/build defaults. */
   defaultEndpoint?: string;
+  /**
+   * Reveal the panel when the control renders in a host-docked right panel
+   * (bound by the GeoLibre wrapper to `app.openRightPanel`). In floating mode
+   * this is unset and {@link OperaControl.expand} drives the internal panel.
+   */
+  onRequestReveal?: () => void;
 }
 
 export interface OperaAgentSearchParams {
@@ -312,6 +318,13 @@ export class OperaControl implements IControl {
   private _mapContainer?: HTMLElement;
   private _container?: HTMLElement;
   private _panel?: HTMLElement;
+  // The scrollable body holding every `[data-field]` input. In floating mode it
+  // lives inside `_panel`; in docked mode it is mounted straight into the host's
+  // right-panel container. `_readForm`/`_syncForm` query it in both modes.
+  private _content?: HTMLElement;
+  // True while the control is rendered into a host-provided docked right panel
+  // (via `renderDocked`) rather than added as a floating MapLibre control.
+  private _docked = false;
   private _status?: HTMLElement;
   private _tableBody?: HTMLElement;
   private _bandSelect?: HTMLSelectElement;
@@ -382,15 +395,17 @@ export class OperaControl implements IControl {
     };
   }
 
-  // --- IControl ----------------------------------------------------------
+  // --- IControl (floating mode) ------------------------------------------
 
   onAdd(map: MapLibreMap): HTMLElement {
     this._map = map;
     this._mapContainer = map.getContainer();
+    this._docked = false;
     this._container = this._createContainer();
     this._panel = this._createPanel();
     this._mapContainer.appendChild(this._panel);
-    this._setupEventListeners();
+    this._attachMapInteractions();
+    this._setupFloatingListeners();
 
     if (!this._state.collapsed) {
       this._panel.classList.add("expanded");
@@ -400,6 +415,60 @@ export class OperaControl implements IControl {
   }
 
   onRemove(): void {
+    this._detachMapInteractions();
+    this._panel?.parentNode?.removeChild(this._panel);
+    this._container?.parentNode?.removeChild(this._container);
+    this._resetRefs();
+  }
+
+  // --- Docked mode (host right panel) ------------------------------------
+
+  /**
+   * Render the OPERA UI into a host-provided docked right-panel container
+   * instead of a floating MapLibre control. The host owns the panel chrome
+   * (header, collapse/close, resize); this method fills only the body and wires
+   * up the same map interactions (footprint select, draw, inspect) as floating
+   * mode. Pair with {@link teardownDocked}, which the wrapper returns as the
+   * panel's cleanup callback.
+   */
+  renderDocked(container: HTMLElement, map: MapLibreMap): void {
+    this._map = map;
+    this._mapContainer = map.getContainer();
+    this._docked = true;
+    // Wrapper carries the `.plugin-control` (theme tokens + box-sizing reset)
+    // and `.opera-panel` (input sizing) classes the panel CSS is scoped to,
+    // without the floating panel's positioning/resize behavior.
+    const wrap = document.createElement("div");
+    wrap.className = "plugin-control opera-panel opera-docked";
+    const content = this._buildContent();
+    wrap.appendChild(content);
+    container.appendChild(wrap);
+    this._panel = wrap;
+    this._attachMapInteractions();
+
+    // Restore any results/selection captured before a previous teardown so a
+    // close/reopen of the docked panel does not lose the search table. A fresh
+    // mount (no prior search) starts empty, matching floating mode.
+    if (this._granules.length > 0) {
+      if (this._view.length === 0) this._view = [...this._granules];
+      this._renderRows();
+      this._refreshSelectionUI();
+    }
+    if (this._lastStatus) this._setStatus(this._lastStatus);
+  }
+
+  /** Tear down the docked render, detaching map interactions and DOM. */
+  teardownDocked(): void {
+    this._detachMapInteractions();
+    this._panel?.parentNode?.removeChild(this._panel);
+    this._docked = false;
+    this._resetRefs();
+  }
+
+  // --- Shared attach/teardown --------------------------------------------
+
+  /** Detach every map listener, overlay, and registered layer this control owns. */
+  private _detachMapInteractions(): void {
     if (this._resizeHandler) {
       window.removeEventListener("resize", this._resizeHandler);
       this._resizeHandler = null;
@@ -417,12 +486,15 @@ export class OperaControl implements IControl {
     }
     this._removeHighlightLayers();
     this._clearLayers();
-    this._panel?.parentNode?.removeChild(this._panel);
-    this._container?.parentNode?.removeChild(this._container);
+  }
+
+  /** Clear all DOM/element references after the control is removed. */
+  private _resetRefs(): void {
     this._map = undefined;
     this._mapContainer = undefined;
     this._container = undefined;
     this._panel = undefined;
+    this._content = undefined;
     this._status = undefined;
     this._tableBody = undefined;
     this._bandSelect = undefined;
@@ -468,6 +540,14 @@ export class OperaControl implements IControl {
   }
 
   expand(): void {
+    // In docked mode the host owns collapse/expand, so ask it to reveal the
+    // panel (e.g. when an agent action needs the UI visible) instead of driving
+    // the internal floating panel.
+    if (this._docked) {
+      this._state.collapsed = false;
+      this._options.onRequestReveal?.();
+      return;
+    }
     if (this._state.collapsed) this.toggle();
   }
 
@@ -1591,6 +1671,16 @@ export class OperaControl implements IControl {
     closeBtn.addEventListener("click", () => this.collapse());
     header.append(title, closeBtn);
 
+    panel.append(header, this._buildContent());
+    return panel;
+  }
+
+  /**
+   * Build the scrollable panel body (every control below the header). Shared by
+   * the floating panel ({@link _createPanel}) and the docked panel
+   * ({@link renderDocked}), which supplies its own host-rendered header.
+   */
+  private _buildContent(): HTMLElement {
     const content = document.createElement("div");
     content.className = "plugin-control-content";
 
@@ -1626,8 +1716,8 @@ export class OperaControl implements IControl {
 
     content.appendChild(this._buildEndpointGroup());
 
-    panel.append(header, content);
-    return panel;
+    this._content = content;
+    return content;
   }
 
   private _buildProductGroup(): HTMLElement {
@@ -2608,8 +2698,8 @@ export class OperaControl implements IControl {
 
   // Read all form field values into state.
   private _readForm(): void {
-    if (!this._panel) return;
-    const fields = this._panel.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+    if (!this._content) return;
+    const fields = this._content.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
       "[data-field]",
     );
     fields.forEach((field) => {
@@ -2627,8 +2717,8 @@ export class OperaControl implements IControl {
 
   // Write state values back into the form inputs.
   private _syncForm(): void {
-    if (!this._panel) return;
-    const fields = this._panel.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+    if (!this._content) return;
+    const fields = this._content.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
       "[data-field]",
     );
     fields.forEach((field) => {
@@ -2646,12 +2736,20 @@ export class OperaControl implements IControl {
 
   // --- Positioning (adapted from the template's PluginControl) -----------
 
-  private _setupEventListeners(): void {
-    // Bidirectional footprint selection: clicking a footprint on the map selects
-    // its row; a pointer cursor signals it is clickable.
+  /**
+   * Bidirectional footprint selection: clicking a footprint on the map selects
+   * its row; a pointer cursor signals it is clickable. Shared by both modes.
+   */
+  private _attachMapInteractions(): void {
     this._map?.on("click", this._onMapClick);
     this._map?.on("mousemove", this._onMapMouseMove);
+  }
 
+  /**
+   * Reposition the floating panel on window/map resize. Only needed in floating
+   * mode; the host manages a docked panel's geometry.
+   */
+  private _setupFloatingListeners(): void {
     // The panel stays open until the user clicks the toggle button or the X
     // close button; it does not collapse on click-outside.
     this._resizeHandler = () => {

@@ -530,6 +530,31 @@
   font-size: 13px;
 }
 
+/*
+ * Docked mode. When the host renders the OPERA UI in a native right-sidebar
+ * panel, the plugin owns only the body. The wrapper carries `.plugin-control`
+ * (so the --pc-* theme tokens and the box-sizing reset apply) and `.opera-panel`
+ * (input sizing), but not `.plugin-control-panel`, so none of the floating
+ * panel's absolute positioning, resize grip, or `display:none` applies. It fills
+ * the host's panel body and lets its content area scroll instead.
+ */
+.opera-docked {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--pc-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.opera-docked .plugin-control-content {
+  /* The content is already the flex-filled scroll area; drop the reserved
+   * scrollbar gutter since the host panel body supplies its own padding. */
+  padding: 10px 12px;
+}
+
 .opera-select {
   appearance: auto;
 }
