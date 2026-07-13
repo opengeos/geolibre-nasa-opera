@@ -59,6 +59,14 @@ export interface SearchNewsOptions {
   maxResults?: number;
   /** Override the Worker endpoint (otherwise resolved from build/global). */
   endpoint?: string;
+  /**
+   * Tavily search topic. Defaults to "general" so retrospective flood events
+   * (a benchmark is QAed after the event) remain reachable; "news" restricts to
+   * recent journalistic coverage (see `days`).
+   */
+  topic?: "general" | "news";
+  /** For the "news" topic, how many days back to search (Worker default 3650). */
+  days?: number;
   /** Injectable fetch for testing. */
   fetchImpl?: typeof fetch;
   /** Timeout in ms (default 25s). */
@@ -109,6 +117,8 @@ export async function searchNews(
       body: JSON.stringify({
         query,
         max_results: Math.min(Math.max(options.maxResults ?? 6, 1), 20),
+        ...(options.topic ? { topic: options.topic } : {}),
+        ...(options.days ? { days: options.days } : {}),
       }),
       signal: controller.signal,
     });

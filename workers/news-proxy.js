@@ -88,6 +88,24 @@ export async function handleRequest(request, env = {}) {
     return jsonResponse({ ok: false, error: "A non-empty 'query' is required." }, cors, 400);
   }
   const maxResults = Math.min(Math.max(Number(payload?.max_results) || 6, 1), 20);
+  // A locked flood benchmark is retrospective (QAed after the event), so the
+  // default must not be recency-limited: Tavily's "news" topic only returns the
+  // last few days, which misses events older than that. "general" surfaces
+  // authoritative retrospective sources (official reports, encyclopedic, and
+  // news). Callers may still request "news" and pass a wide `days` window.
+  const topic = payload?.topic === "news" ? "news" : "general";
+  const tavilyBody = {
+    query,
+    max_results: maxResults,
+    topic,
+    search_depth: "advanced",
+    include_answer: true,
+  };
+  if (topic === "news") {
+    // Default to a wide window so older events remain reachable; clamp override.
+    const days = Math.min(Math.max(Number(payload?.days) || 3650, 1), 3650);
+    tavilyBody.days = days;
+  }
 
   let upstream;
   try {
@@ -97,13 +115,7 @@ export async function handleRequest(request, env = {}) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        query,
-        max_results: maxResults,
-        topic: "news",
-        search_depth: "advanced",
-        include_answer: true,
-      }),
+      body: JSON.stringify(tavilyBody),
     });
   } catch (error) {
     return jsonResponse(
