@@ -1411,7 +1411,9 @@ export class OperaControl implements IControl {
       computeArea: params.computeArea,
     });
     let layerId: string | undefined;
-    if (params.addLayer && result.floodedFeatures.length > 0) {
+    // Draw the flooded buildings by default so they appear on the map (and in
+    // the one-pager snapshot); pass addLayer: false to skip.
+    if (params.addLayer !== false && result.floodedFeatures.length > 0) {
       layerId = `Flooded buildings — ${benchmark.event.name}`;
       this._options.addGeoJsonLayer?.(layerId, {
         type: "FeatureCollection",
@@ -1466,17 +1468,27 @@ export class OperaControl implements IControl {
     const map = this._map;
     if (!map) return null;
     return new Promise<string | null>((resolve) => {
+      let settled = false;
+      const finish = (value: string | null): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const grab = (): string | null => {
+        try {
+          return map.getCanvas().toDataURL("image/png");
+        } catch {
+          return null;
+        }
+      };
       try {
-        map.once("render", () => {
-          try {
-            resolve(map.getCanvas().toDataURL("image/png"));
-          } catch {
-            resolve(null);
-          }
-        });
+        map.once("render", () => finish(grab()));
         map.triggerRepaint();
+        // Fallback so a map that never emits "render" (already idle) can't hang
+        // the one-pager build; grab whatever is on the canvas instead.
+        setTimeout(() => finish(grab()), 2000);
       } catch {
-        resolve(null);
+        finish(null);
       }
     });
   }

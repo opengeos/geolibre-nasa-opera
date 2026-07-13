@@ -38,7 +38,7 @@ Constrained flood one-pager workflow. Two ways to get the flood extent:
 When a benchmark is locked (either kind), follow these rules strictly:
 - Treat the locked benchmark water polygon as ground truth. Never recompute, redraw, or override a human-QAed benchmark. A benchmark derived by derive_flood_benchmark is OPERA-observed (not human-QAed); describe it as such in the one-pager and do not present it as validated ground truth.
 - Operate only within the benchmark bbox. Frame every spatial answer relative to the flooded area it defines.
-- To quantify building exposure, call buildings_in_flood (it intersects the benchmark with OSM buildings). Never invent building counts; report only the numbers the tool returns.
+- To quantify building exposure, call buildings_in_flood (it intersects the benchmark with OSM buildings and, by default, draws the flooded buildings on the map so they appear in the one-pager snapshot). Never invent building counts; report only the numbers the tool returns. Call it before build_one_pager so the buildings layer is on the map.
 - To gather event impacts, call news_impact_search and report ONLY figures you can attribute to a returned source_url, always with publisher and date. If a figure has no citable source, omit it.
 - To show the OPERA-observed flood on the one-pager map, display DSWx (product OPERA_L3_DSWX-HLS_V1, band B01_WTR) for the event dates with water_only=true before calling build_one_pager. water_only hides cloud/ocean/no-data so stacked post-event scenes stay legible; the benchmark remains the authoritative extent.
 - To produce the shareable one-pager, call build_one_pager, passing the buildings result and the cited impacts. Pass buildings/impacts exactly as measured; do not fabricate.
@@ -214,7 +214,10 @@ const buildingsInFloodSchema = z.object({
     .enum(["osm"])
     .optional()
     .describe("Ancillary building source. Only 'osm' (OSM/Overpass) is supported."),
-  add_layer: z.boolean().optional().describe("Draw the flooded buildings as a map layer."),
+  add_layer: z
+    .boolean()
+    .optional()
+    .describe("Draw the flooded buildings as a map layer (default true; pass false to skip)."),
   compute_area: z.boolean().optional().describe("Also sum flooded building footprint area (km²)."),
 });
 
@@ -554,8 +557,8 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
       description:
         "Assemble a self-contained HTML one-pager for the locked benchmark: map snapshot + legend/scale bar + building exposure + cited impacts + narrative, then download it. Requires a locked benchmark.",
       inputSchema: onePagerSchema,
-      callback: async (input) =>
-        toJsonValue(await controlOrThrow().buildOnePagerForAgent({
+      callback: async (input) => {
+        const result = await controlOrThrow().buildOnePagerForAgent({
           title: input.title,
           narrative: input.narrative,
           impacts: input.impacts?.map((i) => ({
@@ -576,7 +579,14 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
             : undefined,
           mapSnapshotDataUrl: input.map_snapshot_data_url,
           download: input.download,
-        })),
+        });
+        // Never return the full HTML to the agent: the document embeds a map
+        // PNG and can be several MB, which would flood the model context (and
+        // appears to hang the agent). Report the size instead; it is already
+        // downloaded.
+        const { html, ...rest } = result;
+        return toJsonValue({ ...rest, bytes: html?.length });
+      },
     }),
   ];
 }
