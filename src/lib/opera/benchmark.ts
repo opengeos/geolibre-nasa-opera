@@ -187,6 +187,8 @@ export function isLockedBenchmark(value: unknown): value is LockedBenchmark {
     isFeatureCollection(b.water) &&
     Array.isArray(b.bbox) &&
     b.bbox.length === 4 &&
+    typeof b.areaKm2 === "number" &&
+    typeof b.lockedAt === "string" &&
     !!b.event &&
     typeof b.event.name === "string"
   );

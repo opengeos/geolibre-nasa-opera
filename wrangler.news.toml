@@ -3,11 +3,20 @@ main = "workers/news-proxy.js"
 compatibility_date = "2026-05-28"
 
 [vars]
-# For production, replace "*" with a comma-separated allowlist such as:
-# ALLOWED_ORIGINS = "https://your-geolibre.example.com,http://localhost:5173"
-ALLOWED_ORIGINS = "*"
+# Fail closed by default: ship a localhost-only allowlist so a misconfigured
+# deployment does not become an open Tavily relay. For production, replace this
+# with your deployed origin(s), e.g.:
+# ALLOWED_ORIGINS = "https://your-geolibre.example.com"
+# Set to "*" only if you intentionally want any origin to use the proxy.
+ALLOWED_ORIGINS = "http://localhost:5173"
 
 # The Tavily API key is a SECRET, never a var. Set it with:
 #   npx wrangler secret put TAVILY_API_KEY --config wrangler.news.toml
 # Then point the plugin at the deployed Worker via VITE_NEWS_PROXY_ENDPOINT
 # (build var) or the GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT window global.
+#
+# Optional: to gate the proxy behind a shared secret (defense against abuse from
+# non-browser clients that ignore CORS), set a CLIENT_SECRET secret with
+#   npx wrangler secret put CLIENT_SECRET --config wrangler.news.toml
+# and have callers send it as the `X-Client-Secret` request header. When unset,
+# the check is skipped.

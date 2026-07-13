@@ -9,7 +9,7 @@
  * it is never shipped in the browser bundle.
  */
 
-const CORS_HEADERS = ["accept", "authorization", "content-type"];
+const CORS_HEADERS = ["accept", "authorization", "content-type", "x-client-secret"];
 const TAVILY_ENDPOINT = "https://api.tavily.com/search";
 
 export default {
@@ -53,6 +53,18 @@ export async function handleRequest(request, env = {}) {
       { ok: false, error: "Only POST /tavily is supported." },
       cors,
       404,
+    );
+  }
+
+  // Optional shared-secret gate so the proxy is not an open Tavily relay. When
+  // CLIENT_SECRET is set, callers must send a matching `X-Client-Secret` header;
+  // when it is unset the check is skipped (backward compatible).
+  const clientSecret = String(env.CLIENT_SECRET || "").trim();
+  if (clientSecret && request.headers.get("X-Client-Secret") !== clientSecret) {
+    return jsonResponse(
+      { ok: false, error: "Missing or invalid X-Client-Secret header." },
+      cors,
+      401,
     );
   }
 
@@ -112,18 +124,22 @@ export async function handleRequest(request, env = {}) {
 }
 
 function corsHeaders(origin, allowedOrigins = "*") {
-  const allowed = String(allowedOrigins || "*")
+  // `?? "*"` (not `|| "*"`): an explicitly empty ALLOWED_ORIGINS denies all
+  // origins rather than silently falling back to the wildcard.
+  const allowed = String(allowedOrigins ?? "*")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  const allowOrigin =
-    allowed.includes("*") || !origin
-      ? "*"
-      : allowed.includes(origin)
-        ? origin
-        : allowed[0] || "*";
+  // Only emit Access-Control-Allow-Origin for a matched (or explicit "*")
+  // origin; for an unmatched origin omit it so the browser blocks the response.
+  let allowOrigin;
+  if (allowed.includes("*") || !origin) {
+    allowOrigin = "*";
+  } else if (allowed.includes(origin)) {
+    allowOrigin = origin;
+  }
   return {
-    "Access-Control-Allow-Origin": allowOrigin,
+    ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin } : {}),
     "Access-Control-Expose-Headers": "Content-Length, Content-Type",
     Vary: "Origin",
   };

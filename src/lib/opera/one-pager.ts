@@ -109,13 +109,23 @@ function legendSvg(render: BenchmarkRender): string {
   return `<svg width="150" height="${height}" viewBox="0 0 150 ${height}" xmlns="http://www.w3.org/2000/svg">${rows}</svg>`;
 }
 
+/** Only http(s) links are safe to embed; sourceUrl comes from external search. */
+function safeHref(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:" ? url : "#";
+  } catch {
+    return "#";
+  }
+}
+
 function impactCard(impact: OnePagerImpact): string {
   const meta = [impact.publisher, impact.date]
     .filter((v): v is string => Boolean(v))
     .map(htmlEscape)
     .join(" · ");
   return (
-    `<a class="impact" href="${htmlEscape(impact.sourceUrl)}" target="_blank" rel="noopener">` +
+    `<a class="impact" href="${htmlEscape(safeHref(impact.sourceUrl))}" target="_blank" rel="noopener">` +
     `<span class="impact-value">${htmlEscape(impact.value)}</span>` +
     `<span class="impact-claim">${htmlEscape(impact.claim)}</span>` +
     (meta ? `<span class="impact-meta">${meta}</span>` : "") +

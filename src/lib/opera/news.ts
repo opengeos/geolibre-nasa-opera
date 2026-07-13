@@ -22,9 +22,12 @@ export function resolveNewsProxyEndpoint(override?: string): string {
   );
 }
 
+const TRAILING_SLASH_RE = /\/+$/;
+const LEADING_WWW_RE = /^www\./;
+
 function clean(value?: string): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
+  return trimmed ? trimmed.replace(TRAILING_SLASH_RE, "") : undefined;
 }
 
 function readGlobal(): string | undefined {
@@ -75,7 +78,7 @@ interface TavilyResponse {
 
 function publisherFromUrl(url: string): string {
   try {
-    return new URL(url).hostname.replace(/^www\./, "");
+    return new URL(url).hostname.replace(LEADING_WWW_RE, "");
   } catch {
     return "";
   }
@@ -110,7 +113,14 @@ export async function searchNews(
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new Error(`News proxy responded ${response.status}`);
+      let detail = "";
+      try {
+        const errBody = (await response.json()) as { error?: unknown };
+        detail = typeof errBody?.error === "string" ? `: ${errBody.error}` : "";
+      } catch {
+        /* non-JSON error body — fall back to the status alone */
+      }
+      throw new Error(`News proxy responded ${response.status}${detail}`);
     }
     const data = (await response.json()) as TavilyResponse;
     const results: NewsResult[] = (data.results ?? [])
