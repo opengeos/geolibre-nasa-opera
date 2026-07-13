@@ -26,6 +26,31 @@ export const DSWX_WTR_COLORMAP: Record<string, [number, number, number, number]>
     "255": [0, 0, 0, 0], // fill / no data -> transparent
   };
 
+/**
+ * Water-only variant of {@link DSWX_WTR_COLORMAP}: keeps open water (1) and
+ * partial surface water (2), and makes every other class — including
+ * cloud/cloud-shadow, snow/ice, and ocean-masked — transparent. Useful for
+ * flood snapshots (e.g. the one-pager) where stacking several post-event scenes
+ * would otherwise paint opaque grey cloud and navy ocean over the AOI.
+ */
+export const DSWX_WTR_WATER_ONLY_COLORMAP: Record<
+  string,
+  [number, number, number, number]
+> = {
+  "0": [0, 0, 0, 0], // not water -> transparent
+  "1": [0, 0, 255, 255], // open water -> blue
+  "2": [135, 206, 250, 255], // partial surface water -> lightskyblue
+  "252": [0, 0, 0, 0], // snow/ice -> transparent
+  "253": [0, 0, 0, 0], // cloud/cloud shadow -> transparent
+  "254": [0, 0, 0, 0], // ocean masked -> transparent
+  "255": [0, 0, 0, 0], // fill / no data -> transparent
+};
+
+/** The water-only DSWx colormap as a titiler `colormap` JSON string. */
+export function dswxWaterOnlyColormap(): string {
+  return JSON.stringify(DSWX_WTR_WATER_ONLY_COLORMAP);
+}
+
 /** Human-readable labels for DSWx WTR class values, used in stats breakdowns. */
 export const DSWX_WTR_CLASS_LABELS: Record<string, string> = {
   "0": "Not water",
@@ -49,11 +74,14 @@ export const DSWX_PARTIAL_WATER_CLASS = 2;
 export function colormapForBand(
   shortName: string,
   band?: string,
+  opts: { waterOnly?: boolean } = {},
 ): string | undefined {
   if (!band) return undefined;
   // DSWx water bands: WTR, BWTR, WTR-1, WTR-2 all share the WTR class colormap.
   if (/DSWX/i.test(shortName) && /WTR/i.test(band)) {
-    return JSON.stringify(DSWX_WTR_COLORMAP);
+    return opts.waterOnly
+      ? dswxWaterOnlyColormap()
+      : JSON.stringify(DSWX_WTR_COLORMAP);
   }
   return undefined;
 }

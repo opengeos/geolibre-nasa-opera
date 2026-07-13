@@ -26,6 +26,13 @@ export default defineConfig({
       "@": resolve(__dirname, "src"),
     },
   },
+  // Optionally bundle the OpenAI key from the build environment so the dev
+  // harness/GeoAgent starts without a manual key prompt. Only src/geolibre.ts
+  // and examples/main.ts reference this global; the library entries do not, so
+  // this define is a no-op for the npm build. See src/vite-env.d.ts.
+  define: {
+    __OPERA_OPENAI_API_KEY__: JSON.stringify(process.env.OPENAI_API_KEY ?? ""),
+  },
   build: {
     lib: {
       entry: {

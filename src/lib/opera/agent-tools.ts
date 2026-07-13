@@ -30,7 +30,16 @@ Advanced titiler-cmr tools are also available for backend-aware analysis beyond 
 - Use titiler_cmr_tilejson for arbitrary rasterio or xarray TileJSON generation and optional layer registration.
 - Use titiler_cmr_point_query for backend-aware pixel/variable sampling.
 - Use titiler_cmr_statistics for AOI statistics over bbox or GeoJSON.
-- Use titiler_cmr_timeseries_tilejson for time-indexed TileJSON responses.`;
+- Use titiler_cmr_timeseries_tilejson for time-indexed TileJSON responses.
+
+Constrained flood one-pager workflow. When a benchmark is locked (check get_opera_context or get_benchmark), it is a human-QAed flood water extent and is the AUTHORITATIVE ground truth and spatial boundary. Follow these rules strictly:
+- Treat the locked benchmark water polygon as ground truth. Never recompute, redraw, or override it, and do not substitute an OPERA-derived water extent for it.
+- Operate only within the benchmark bbox. Frame every spatial answer relative to the flooded area it defines.
+- To quantify building exposure, call buildings_in_flood (it intersects the benchmark with OSM buildings). Never invent building counts; report only the numbers the tool returns.
+- To gather event impacts, call news_impact_search and report ONLY figures you can attribute to a returned source_url, always with publisher and date. If a figure has no citable source, omit it.
+- To show the OPERA-observed flood on the one-pager map, display DSWx (product OPERA_L3_DSWX-HLS_V1, band B01_WTR) for the event dates with water_only=true before calling build_one_pager. water_only hides cloud/ocean/no-data so stacked post-event scenes stay legible; the benchmark remains the authoritative extent.
+- To produce the shareable one-pager, call build_one_pager, passing the buildings result and the cited impacts. Pass buildings/impacts exactly as measured; do not fabricate.
+- If the user asks for flood analysis but no benchmark is locked, tell them to import and lock a benchmark GeoJSON in the OPERA panel's Benchmark section first.`;
 
 const bboxSchema = z
   .union([z.array(z.number()).length(4), z.string()])
@@ -64,6 +73,12 @@ const displaySchema = z.object({
   rescale: z.string().optional().describe("Optional render stretch such as '0,3000'."),
   colormap_name: z.string().optional().describe("Optional titiler named colormap, e.g. terrain, gray, blues."),
   expression: z.string().optional().describe("Optional rio-tiler expression; selected band is b1."),
+  water_only: z
+    .boolean()
+    .optional()
+    .describe(
+      "DSWx WTR bands only: show open + partial surface water and hide cloud/ocean/no-data. Use when preparing a flood one-pager so stacked scenes stay legible.",
+    ),
 });
 
 const searchAndDisplaySchema = searchSchema.merge(displaySchema);
@@ -173,6 +188,51 @@ const titilerTimeseriesSchema = titilerTileJsonSchema.extend({
   add_first_to_map: z.boolean().optional().describe("Register the first returned timeseries TileJSON as a map layer."),
 });
 
+const buildingsInFloodSchema = z.object({
+  building_source: z
+    .enum(["osm"])
+    .optional()
+    .describe("Ancillary building source. Only 'osm' (OSM/Overpass) is supported."),
+  add_layer: z.boolean().optional().describe("Draw the flooded buildings as a map layer."),
+  compute_area: z.boolean().optional().describe("Also sum flooded building footprint area (km²)."),
+});
+
+const newsImpactSchema = z.object({
+  query: z
+    .string()
+    .describe("News search query, e.g. 'Valencia flood October 2024 deaths damages displaced'."),
+  max_results: z.number().int().min(1).max(20).optional(),
+});
+
+const impactSchema = z.object({
+  claim: z.string().describe("What the figure measures, e.g. 'Fatalities', 'Economic loss'."),
+  value: z.string().describe("The figure as text, e.g. '224', '$4.2B'."),
+  source_url: z.string().describe("Article URL the figure is cited from (required)."),
+  publisher: z.string().optional(),
+  date: z.string().optional(),
+});
+
+const onePagerSchema = z.object({
+  title: z.string().optional(),
+  narrative: z.string().optional().describe("Background paragraph describing the event."),
+  impacts: z.array(impactSchema).optional().describe("Cited impact figures. Every entry needs a source_url."),
+  buildings: z
+    .object({
+      flooded_count: z.number(),
+      total: z.number(),
+      fraction: z.number(),
+      flooded_area_km2: z.number().optional(),
+      source: z.string().optional(),
+    })
+    .optional()
+    .describe("Building-exposure result from buildings_in_flood."),
+  map_snapshot_data_url: z
+    .string()
+    .optional()
+    .describe("Optional map PNG data URL. Omit to let the plugin capture the current map."),
+  download: z.boolean().optional().describe("Download the HTML (default true)."),
+});
+
 type TitilerCommonInput = z.infer<typeof titilerCommonSchema>;
 
 export function createOperaAgentTools(getControl: () => OperaControl | null): Tool[] {
@@ -219,6 +279,7 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
           rescale: input.rescale,
           colormapName: input.colormap_name,
           expression: input.expression,
+          waterOnly: input.water_only,
         })),
     }),
     tool({
@@ -245,6 +306,7 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
           rescale: input.rescale,
           colormapName: input.colormap_name,
           expression: input.expression,
+          waterOnly: input.water_only,
         });
         return toJsonValue({ search, display });
       },
@@ -420,6 +482,65 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
           layer,
         });
       },
+    }),
+    tool({
+      name: "get_benchmark",
+      description:
+        "Return the locked human-QAed flood benchmark (the authoritative boundary), or a prompt to import one if none is locked.",
+      inputSchema: z.object({}),
+      callback: () => toJsonValue(controlOrThrow().getBenchmarkForAgent()),
+    }),
+    tool({
+      name: "buildings_in_flood",
+      description:
+        "Intersect the locked benchmark flood water polygon with OSM building footprints (Overpass) to quantify building exposure within the flooded area. Requires a locked benchmark.",
+      inputSchema: buildingsInFloodSchema,
+      callback: async (input) =>
+        toJsonValue(await controlOrThrow().buildingsInFloodForAgent({
+          buildingSource: input.building_source,
+          addLayer: input.add_layer,
+          computeArea: input.compute_area,
+        })),
+    }),
+    tool({
+      name: "news_impact_search",
+      description:
+        "Search reputable news for quantified financial/societal/public-safety impact figures. Returns results with source_url, publisher, and date so every figure is citable.",
+      inputSchema: newsImpactSchema,
+      callback: async (input) =>
+        toJsonValue(await controlOrThrow().newsImpactSearchForAgent({
+          query: input.query,
+          maxResults: input.max_results,
+        })),
+    }),
+    tool({
+      name: "build_one_pager",
+      description:
+        "Assemble a self-contained HTML one-pager for the locked benchmark: map snapshot + legend/scale bar + building exposure + cited impacts + narrative, then download it. Requires a locked benchmark.",
+      inputSchema: onePagerSchema,
+      callback: async (input) =>
+        toJsonValue(await controlOrThrow().buildOnePagerForAgent({
+          title: input.title,
+          narrative: input.narrative,
+          impacts: input.impacts?.map((i) => ({
+            claim: i.claim,
+            value: i.value,
+            sourceUrl: i.source_url,
+            publisher: i.publisher,
+            date: i.date,
+          })),
+          buildings: input.buildings
+            ? {
+                floodedCount: input.buildings.flooded_count,
+                total: input.buildings.total,
+                fraction: input.buildings.fraction,
+                floodedAreaKm2: input.buildings.flooded_area_km2,
+                source: input.buildings.source,
+              }
+            : undefined,
+          mapSnapshotDataUrl: input.map_snapshot_data_url,
+          download: input.download,
+        })),
     }),
   ];
 }

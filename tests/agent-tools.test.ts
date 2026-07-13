@@ -24,11 +24,89 @@ describe("OPERA agent tools", () => {
       "titiler_cmr_point_query",
       "titiler_cmr_statistics",
       "titiler_cmr_timeseries_tilejson",
+      "get_benchmark",
+      "buildings_in_flood",
+      "news_impact_search",
+      "build_one_pager",
     ]);
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("search_and_display_opera");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("detect_opera_change_between_dates");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("analyze_opera_time_series");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("OPERA_L3_DSWX-HLS_V1");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("benchmark");
+  });
+
+  it("gates benchmark tools when no control is active", () => {
+    const tools = createOperaAgentTools(() => null) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => unknown;
+    }>;
+    const getBenchmark = tools.find((t) => t.name === "get_benchmark")!;
+    // With no active control, controlOrThrow throws.
+    expect(() => getBenchmark._callback({})).toThrow(/not active/i);
+  });
+
+  it("forwards benchmark workflow inputs to the control", async () => {
+    const control = {
+      getBenchmarkForAgent: vi.fn(() => ({ ok: true, status: "Benchmark locked" })),
+      buildingsInFloodForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Found 5 building(s) within the flood extent.",
+        total: 20,
+        floodedCount: 5,
+        fraction: 0.25,
+        source: "OpenStreetMap (Overpass)",
+      })),
+      newsImpactSearchForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Found 2 news result(s).",
+        results: [],
+      })),
+      buildOnePagerForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "One-pager ready and downloaded.",
+        filename: "opera-one-pager-valencia.html",
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown>;
+    }>;
+
+    await tools.find((t) => t.name === "buildings_in_flood")!._callback({
+      add_layer: true,
+      compute_area: true,
+    });
+    expect(control.buildingsInFloodForAgent).toHaveBeenCalledWith({
+      buildingSource: undefined,
+      addLayer: true,
+      computeArea: true,
+    });
+
+    await tools.find((t) => t.name === "news_impact_search")!._callback({
+      query: "Valencia flood deaths",
+      max_results: 5,
+    });
+    expect(control.newsImpactSearchForAgent).toHaveBeenCalledWith({
+      query: "Valencia flood deaths",
+      maxResults: 5,
+    });
+
+    await tools.find((t) => t.name === "build_one_pager")!._callback({
+      title: "Valencia DANA",
+      impacts: [
+        { claim: "Fatalities", value: "224", source_url: "https://example.com/a", date: "2024-11" },
+      ],
+      buildings: { flooded_count: 5, total: 20, fraction: 0.25 },
+    });
+    const onePagerArg = control.buildOnePagerForAgent.mock.calls[0][0];
+    expect(onePagerArg.title).toBe("Valencia DANA");
+    expect(onePagerArg.impacts[0]).toMatchObject({
+      claim: "Fatalities",
+      value: "224",
+      sourceUrl: "https://example.com/a",
+    });
+    expect(onePagerArg.buildings).toMatchObject({ floodedCount: 5, total: 20 });
   });
 
   it("forwards search and display inputs to the OPERA control", async () => {
