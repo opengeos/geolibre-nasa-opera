@@ -33,6 +33,11 @@ Current version: **0.3.0**.
 
 ### Constrained flood one-pager workflow
 
+- [x] **Space + time → one-pager.** `derive_flood_benchmark` auto-derives the
+      flood extent from OPERA DSWx (searches DSWx-HLS, renders observed
+      open/partial water, and vectorizes it into a polygon) so the agent can
+      produce a one-pager from just an AOI + date range — no human benchmark
+      required. The derived extent is labeled OPERA-observed, not QAed.
 - [x] Import + **lock** a human-QAed flood water-extent GeoJSON as the
       authoritative ground truth; it persists with the project and redraws on reload.
 - [x] `buildings_in_flood` — benchmark ∩ OSM building footprints (Overpass) for

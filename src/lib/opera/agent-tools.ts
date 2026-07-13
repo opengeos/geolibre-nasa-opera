@@ -32,14 +32,17 @@ Advanced titiler-cmr tools are also available for backend-aware analysis beyond 
 - Use titiler_cmr_statistics for AOI statistics over bbox or GeoJSON.
 - Use titiler_cmr_timeseries_tilejson for time-indexed TileJSON responses.
 
-Constrained flood one-pager workflow. When a benchmark is locked (check get_opera_context or get_benchmark), it is a human-QAed flood water extent and is the AUTHORITATIVE ground truth and spatial boundary. Follow these rules strictly:
-- Treat the locked benchmark water polygon as ground truth. Never recompute, redraw, or override it, and do not substitute an OPERA-derived water extent for it.
+Constrained flood one-pager workflow. Two ways to get the flood extent:
+- If the user gives a place/AOI + a date range but NO benchmark is locked, call derive_flood_benchmark(bbox, start, end, event_name?, place?) first. It searches OPERA DSWx-HLS, renders the observed open/partial surface water on the map, vectorizes it, and locks it as an OPERA-DERIVED benchmark. If the user gives a place name but no bbox, navigate/zoom the map to the place first (MapLibre tools) so the current extent is the AOI, or pass a bbox. This is the "just space + time" path.
+- If a human-QAed benchmark is already locked (check get_opera_context or get_benchmark), it is the AUTHORITATIVE ground truth; prefer it over deriving one.
+When a benchmark is locked (either kind), follow these rules strictly:
+- Treat the locked benchmark water polygon as ground truth. Never recompute, redraw, or override a human-QAed benchmark. A benchmark derived by derive_flood_benchmark is OPERA-observed (not human-QAed); describe it as such in the one-pager and do not present it as validated ground truth.
 - Operate only within the benchmark bbox. Frame every spatial answer relative to the flooded area it defines.
 - To quantify building exposure, call buildings_in_flood (it intersects the benchmark with OSM buildings). Never invent building counts; report only the numbers the tool returns.
 - To gather event impacts, call news_impact_search and report ONLY figures you can attribute to a returned source_url, always with publisher and date. If a figure has no citable source, omit it.
 - To show the OPERA-observed flood on the one-pager map, display DSWx (product OPERA_L3_DSWX-HLS_V1, band B01_WTR) for the event dates with water_only=true before calling build_one_pager. water_only hides cloud/ocean/no-data so stacked post-event scenes stay legible; the benchmark remains the authoritative extent.
 - To produce the shareable one-pager, call build_one_pager, passing the buildings result and the cited impacts. Pass buildings/impacts exactly as measured; do not fabricate.
-- If the user asks for flood analysis but no benchmark is locked, tell them to import and lock a benchmark GeoJSON in the OPERA panel's Benchmark section first.`;
+- If the user asks for flood analysis but no benchmark is locked: derive one from OPERA DSWx with derive_flood_benchmark when they gave a place + dates, or tell them to import and lock a QAed benchmark GeoJSON in the OPERA panel's Benchmark section for an authoritative extent.`;
 
 const bboxSchema = z
   .union([z.array(z.number()).length(4), z.string()])
@@ -186,6 +189,24 @@ const titilerTimeseriesSchema = titilerTileJsonSchema.extend({
   step: z.string().optional().describe("ISO-8601 duration step, e.g. P1D, P1W, P1M."),
   temporal_mode: z.enum(["point", "interval"]).optional(),
   add_first_to_map: z.boolean().optional().describe("Register the first returned timeseries TileJSON as a map layer."),
+});
+
+const deriveFloodBenchmarkSchema = z.object({
+  bbox: bboxSchema,
+  start: z.string().describe("Inclusive start date, YYYY-MM-DD (event window start)."),
+  end: z.string().describe("Inclusive end date, YYYY-MM-DD (event window end)."),
+  event_name: z
+    .string()
+    .optional()
+    .describe("Event name for the derived benchmark, e.g. 'Valencia DANA flooding'."),
+  place: z.string().optional().describe("Human place label for the one-pager subtitle."),
+  max_granules: z
+    .number()
+    .int()
+    .min(1)
+    .max(12)
+    .optional()
+    .describe("Max DSWx granules to mosaic for the observed-water extent (default 6)."),
 });
 
 const buildingsInFloodSchema = z.object({
@@ -491,9 +512,24 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
       callback: () => toJsonValue(controlOrThrow().getBenchmarkForAgent()),
     }),
     tool({
+      name: "derive_flood_benchmark",
+      description:
+        "Auto-derive a flood benchmark from OPERA DSWx for an AOI + date range when NO human-QAed benchmark is locked. Searches DSWx-HLS, renders the observed open/partial surface water on the map, vectorizes it into a polygon, and locks it as the working benchmark (labeled OPERA-observed, not QAed). Use this first when the user asks for a flood one-pager for a place + time. After it succeeds, continue with buildings_in_flood -> news_impact_search -> build_one_pager.",
+      inputSchema: deriveFloodBenchmarkSchema,
+      callback: async (input) =>
+        toJsonValue(await controlOrThrow().deriveFloodBenchmarkForAgent({
+          bbox: input.bbox as BBox | string | undefined,
+          start: input.start,
+          end: input.end,
+          eventName: input.event_name,
+          place: input.place,
+          maxGranules: input.max_granules,
+        })),
+    }),
+    tool({
       name: "buildings_in_flood",
       description:
-        "Intersect the locked benchmark flood water polygon with OSM building footprints (Overpass) to quantify building exposure within the flooded area. Requires a locked benchmark.",
+        "Intersect the locked benchmark flood water polygon with OSM building footprints (Overpass) to quantify building exposure within the flooded area. Requires a locked benchmark (human-QAed or derived via derive_flood_benchmark).",
       inputSchema: buildingsInFloodSchema,
       callback: async (input) =>
         toJsonValue(await controlOrThrow().buildingsInFloodForAgent({

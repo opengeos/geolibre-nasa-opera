@@ -25,6 +25,7 @@ describe("OPERA agent tools", () => {
       "titiler_cmr_statistics",
       "titiler_cmr_timeseries_tilejson",
       "get_benchmark",
+      "derive_flood_benchmark",
       "buildings_in_flood",
       "news_impact_search",
       "build_one_pager",

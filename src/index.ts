@@ -61,6 +61,12 @@ export {
 } from "./lib/opera/benchmark";
 export { buildingsInFlood, waterBBox, waterAreaKm2 } from "./lib/opera/geometry";
 export { fetchOsmBuildings } from "./lib/opera/buildings";
+export {
+  deriveFloodExtent,
+  maskToFeatureCollection,
+  traceMaskRings,
+  chooseZoom,
+} from "./lib/opera/flood-extent";
 export { searchNews, type NewsResult } from "./lib/opera/news";
 export {
   buildOnePagerHtml,

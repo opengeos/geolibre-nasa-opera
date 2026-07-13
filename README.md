@@ -236,11 +236,19 @@ A supervised, human-in-the-loop workflow that turns a human-QAed flood map into 
 shareable one-pager, designed so the agent cannot hallucinate the authoritative
 map or uncited impact numbers:
 
-1. **Import a benchmark.** In the OPERA panel's **Flood benchmark** section,
-   import a QAed flood water-extent GeoJSON (`Polygon`/`MultiPolygon`). It is
-   *locked* as the authoritative ground truth and drawn on the map. A sample
-   placeholder is at [`examples/sample-benchmark-valencia.geojson`](examples/sample-benchmark-valencia.geojson)
-   — replace it with your real, QAed extent.
+1. **Get a flood extent** one of two ways:
+   - **Just space + time (auto).** Ask the agent for a one-pager for a place and a
+     date range and it calls `derive_flood_benchmark`: it searches OPERA DSWx-HLS
+     for the AOI + dates, renders the observed open/partial surface water, and
+     **vectorizes it** into a flood polygon that is locked as the working
+     benchmark. This extent is *OPERA-observed, not human-QAed* and is labeled as
+     such on the one-pager.
+   - **Import a QAed benchmark (authoritative).** In the OPERA panel's **Flood
+     benchmark** section, import a QAed flood water-extent GeoJSON
+     (`Polygon`/`MultiPolygon`). It is *locked* as the authoritative ground truth
+     and drawn on the map. A sample placeholder is at
+     [`examples/sample-benchmark-valencia.geojson`](examples/sample-benchmark-valencia.geojson).
+     When a QAed benchmark is locked, the agent uses it instead of deriving one.
 2. **Ask the agent.** With a benchmark locked, the GeoAgent is constrained to it:
    - `buildings_in_flood` intersects the benchmark with OSM building footprints
      (via the public Overpass API — no proxy needed) to quantify exposure.

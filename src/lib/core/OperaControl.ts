@@ -59,6 +59,7 @@ import {
   type LockedBenchmark,
 } from "../opera/benchmark";
 import { fetchOsmBuildings } from "../opera/buildings";
+import { deriveFloodExtent } from "../opera/flood-extent";
 import { buildingsInFlood, type GeoFeatureCollection } from "../opera/geometry";
 import { searchNews, type NewsResult } from "../opera/news";
 import {
@@ -285,6 +286,28 @@ export interface OperaAgentBenchmarkResult {
   ok: boolean;
   status: string;
   benchmark?: BenchmarkSummary;
+}
+
+export interface OperaAgentDeriveFloodParams {
+  /** AOI as [west,south,east,north] or a "w,s,e,n" string. Omit to use panel bbox. */
+  bbox?: BBox | string;
+  /** Inclusive start date, YYYY-MM-DD. */
+  start: string;
+  /** Inclusive end date, YYYY-MM-DD. */
+  end: string;
+  /** Event name for the derived benchmark (e.g. "Valencia DANA flooding"). */
+  eventName?: string;
+  /** Human place label for the benchmark/one-pager subtitle. */
+  place?: string;
+  /** Max DSWx granules to mosaic (1-12); default 6. */
+  maxGranules?: number;
+}
+
+export interface OperaAgentDeriveFloodResult extends OperaAgentBenchmarkResult {
+  /** DSWx raster layer ids added to the map for the one-pager snapshot. */
+  dswxLayerIds: string[];
+  /** How many DSWx granules contributed to the observed-water mosaic. */
+  granulesUsed: number;
 }
 
 export interface OperaAgentBuildingsParams {
@@ -1226,6 +1249,125 @@ export class OperaControl implements IControl {
       type: "FeatureCollection",
       features: benchmark.water.features,
     });
+  }
+
+  /**
+   * Auto-derive a flood benchmark from OPERA DSWx for an AOI + date range, so
+   * the flood one-pager can be produced from just space + time (no human-QAed
+   * GeoJSON). Searches DSWx-HLS, renders the observed open/partial water as
+   * water-only tiles on the map (for the one-pager snapshot), vectorizes that
+   * water into a polygon, and locks it as the working benchmark. The result is
+   * explicitly OPERA-observed, not a human-QAed benchmark.
+   */
+  async deriveFloodBenchmarkForAgent(
+    params: OperaAgentDeriveFloodParams,
+  ): Promise<OperaAgentDeriveFloodResult> {
+    this.expand();
+    const shortName = "OPERA_L3_DSWX-HLS_V1";
+    const bbox =
+      (params.bbox !== undefined ? normalizeAgentBBox(params.bbox) : undefined) ??
+      normalizeAgentBBox(this._state.bbox);
+    if (!bbox) {
+      return {
+        ok: false,
+        status: "Provide a bbox [west,south,east,north] or set the panel extent first.",
+        dswxLayerIds: [],
+        granulesUsed: 0,
+      };
+    }
+    const product = getProduct(shortName);
+    if (!product) {
+      return { ok: false, status: `Unknown product ${shortName}.`, dswxLayerIds: [], granulesUsed: 0 };
+    }
+    const maxGranules = Math.min(Math.max(params.maxGranules ?? 6, 1), 12);
+
+    // 1) Search DSWx-HLS over the AOI + dates (also populates the panel/table).
+    const search = await this.searchForAgent({
+      product: shortName, bbox, start: params.start, end: params.end, count: maxGranules,
+    });
+    const granules = this._granules.slice(0, maxGranules);
+    if (!search.ok || granules.length === 0) {
+      return {
+        ok: false,
+        status: `No OPERA DSWx-HLS granules found for the AOI over ${params.start}..${params.end}.`,
+        dswxLayerIds: [],
+        granulesUsed: 0,
+      };
+    }
+
+    // 2) Build water-only DSWx tiles, register them on the map (for the
+    //    snapshot), and collect the tile templates to vectorize.
+    const band = product.render.bands?.[0] ?? "B01_WTR";
+    const colormap = colormapForBand(shortName, band, { waterOnly: true });
+    const conceptId = granules[0].conceptId ?? (await resolveConceptId(shortName));
+    const endpoint = this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT;
+    const tileTemplates: string[] = [];
+    const dswxLayerIds: string[] = [];
+    this._setStatus("Loading OPERA DSWx observed-water tiles…");
+    for (const g of granules) {
+      try {
+        const url = buildTileJsonUrl({
+          endpoint, conceptId, backend: product.render.backend, granuleUr: g.id,
+          bands: [band], bandsRegex: product.render.bandsRegex, colormap,
+        });
+        const tj = await fetchTileJson(url);
+        if (!tj.tiles?.[0]) continue;
+        tileTemplates.push(tj.tiles[0]);
+        const reg = this.registerTileJsonForAgent({
+          name: `OPERA DSWx water — ${g.id}`,
+          id: `opera-dswx-water-${slug(g.id)}`,
+          tilejson: tj,
+          fitBounds: false,
+          metadata: { sourceKind: "opera-titiler-cmr", granuleId: g.id },
+        });
+        if (reg.layerId) dswxLayerIds.push(reg.layerId);
+      } catch {
+        // Skip a granule whose tilejson fails; report the partial count below.
+      }
+    }
+    if (tileTemplates.length === 0) {
+      return { ok: false, status: "Could not load DSWx tiles from titiler-cmr.", dswxLayerIds, granulesUsed: 0 };
+    }
+
+    // 3) Vectorize the observed open + partial surface water into a polygon.
+    this._setStatus("Deriving the OPERA-observed flood extent…");
+    let water: GeoFeatureCollection;
+    try {
+      water = await deriveFloodExtent(bbox, tileTemplates);
+    } catch (err) {
+      const status = `Flood-extent derivation failed: ${err instanceof Error ? err.message : String(err)}`;
+      this._setStatus(status);
+      return { ok: false, status, dswxLayerIds, granulesUsed: tileTemplates.length };
+    }
+    if (water.features.length === 0) {
+      const status =
+        "No OPERA DSWx surface water was observed in the AOI for these dates (or the tiles could not be read). Try a wider date window or a different AOI.";
+      this._setStatus(status);
+      return { ok: false, status, dswxLayerIds, granulesUsed: tileTemplates.length };
+    }
+
+    // 4) Lock the derived extent as the working benchmark (OPERA-derived, not QAed).
+    const eventName =
+      params.eventName?.trim() || (params.place ? `${params.place} flood` : "OPERA-derived flood");
+    const dateLabel =
+      params.start === params.end ? params.start : `${params.start} – ${params.end}`;
+    const lock = this.lockBenchmarkFromGeoJson(
+      water,
+      { name: eventName, date: dateLabel, location: params.place },
+      {
+        label: "OPERA DSWx observed water",
+        fillColor: "#2b7fff",
+        classes: [{ label: "DSWx open + partial water", color: "#2b7fff" }],
+      },
+    );
+    if (!lock.ok) {
+      return { ok: false, status: lock.status, dswxLayerIds, granulesUsed: tileTemplates.length };
+    }
+    const status = `Derived an OPERA flood extent from ${tileTemplates.length} DSWx granule(s): ${
+      lock.benchmark?.areaKm2.toFixed(2) ?? "?"
+    } km². This is observed OPERA water, not a human-QAed benchmark.`;
+    this._setStatus(status);
+    return { ok: true, status, benchmark: lock.benchmark, dswxLayerIds, granulesUsed: tileTemplates.length };
   }
 
   /**
