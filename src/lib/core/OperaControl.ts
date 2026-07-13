@@ -152,6 +152,12 @@ export interface OperaAgentDisplayParams {
   colormapName?: string;
   /** Optional rio-tiler expression; selected band is b1. */
   expression?: string;
+  /**
+   * DSWx WTR bands only: render open water + partial surface water and make
+   * cloud/ocean-masked/no-data transparent. Keeps flood snapshots (the
+   * one-pager) legible when several post-event scenes are stacked.
+   */
+  waterOnly?: boolean;
 }
 
 export interface OperaAgentChangeParams {
@@ -761,7 +767,7 @@ export class OperaControl implements IControl {
       this._setExpression(params.expression);
     }
     const before = new Set(this._registeredLayerIds);
-    await this._onDisplay();
+    await this._onDisplay({ waterOnly: params.waterOnly });
     const displayedLayerIds = this._registeredLayerIds.filter((id) => !before.has(id));
     return {
       ok: displayedLayerIds.length > 0 && !/^Display failed:/i.test(this._lastStatus),
@@ -1472,7 +1478,7 @@ export class OperaControl implements IControl {
     }
   }
 
-  private async _onDisplay(): Promise<void> {
+  private async _onDisplay(opts: { waterOnly?: boolean } = {}): Promise<void> {
     const product = getProduct(this._state.product);
     const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
     if (!product || selected.length === 0) {
@@ -1490,7 +1496,9 @@ export class OperaControl implements IControl {
     const categorical =
       userColormap || expression
         ? undefined
-        : colormapForBand(product.shortName, band);
+        : colormapForBand(product.shortName, band, {
+            waterOnly: opts.waterOnly,
+          });
 
     this._setDisplayBusy(true);
     this._setStatus(

@@ -37,6 +37,7 @@ Constrained flood one-pager workflow. When a benchmark is locked (check get_oper
 - Operate only within the benchmark bbox. Frame every spatial answer relative to the flooded area it defines.
 - To quantify building exposure, call buildings_in_flood (it intersects the benchmark with OSM buildings). Never invent building counts; report only the numbers the tool returns.
 - To gather event impacts, call news_impact_search and report ONLY figures you can attribute to a returned source_url, always with publisher and date. If a figure has no citable source, omit it.
+- To show the OPERA-observed flood on the one-pager map, display DSWx (product OPERA_L3_DSWX-HLS_V1, band B01_WTR) for the event dates with water_only=true before calling build_one_pager. water_only hides cloud/ocean/no-data so stacked post-event scenes stay legible; the benchmark remains the authoritative extent.
 - To produce the shareable one-pager, call build_one_pager, passing the buildings result and the cited impacts. Pass buildings/impacts exactly as measured; do not fabricate.
 - If the user asks for flood analysis but no benchmark is locked, tell them to import and lock a benchmark GeoJSON in the OPERA panel's Benchmark section first.`;
 
@@ -72,6 +73,12 @@ const displaySchema = z.object({
   rescale: z.string().optional().describe("Optional render stretch such as '0,3000'."),
   colormap_name: z.string().optional().describe("Optional titiler named colormap, e.g. terrain, gray, blues."),
   expression: z.string().optional().describe("Optional rio-tiler expression; selected band is b1."),
+  water_only: z
+    .boolean()
+    .optional()
+    .describe(
+      "DSWx WTR bands only: show open + partial surface water and hide cloud/ocean/no-data. Use when preparing a flood one-pager so stacked scenes stay legible.",
+    ),
 });
 
 const searchAndDisplaySchema = searchSchema.merge(displaySchema);
@@ -272,6 +279,7 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
           rescale: input.rescale,
           colormapName: input.colormap_name,
           expression: input.expression,
+          waterOnly: input.water_only,
         })),
     }),
     tool({
@@ -298,6 +306,7 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
           rescale: input.rescale,
           colormapName: input.colormap_name,
           expression: input.expression,
+          waterOnly: input.water_only,
         });
         return toJsonValue({ search, display });
       },

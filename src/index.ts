@@ -41,7 +41,12 @@ export {
   tileSizeFromTemplate,
   DEFAULT_TITILER_CMR_ENDPOINT,
 } from "./lib/opera/titiler";
-export { DSWX_WTR_COLORMAP, colormapForBand } from "./lib/opera/colormaps";
+export {
+  DSWX_WTR_COLORMAP,
+  DSWX_WTR_WATER_ONLY_COLORMAP,
+  dswxWaterOnlyColormap,
+  colormapForBand,
+} from "./lib/opera/colormaps";
 
 // Constrained flood one-pager workflow
 export {
