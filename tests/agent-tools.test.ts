@@ -25,6 +25,7 @@ describe("OPERA agent tools", () => {
       "titiler_cmr_statistics",
       "titiler_cmr_timeseries_tilejson",
       "get_benchmark",
+      "derive_flood_benchmark",
       "buildings_in_flood",
       "news_impact_search",
       "build_one_pager",
@@ -107,6 +108,28 @@ describe("OPERA agent tools", () => {
       sourceUrl: "https://example.com/a",
     });
     expect(onePagerArg.buildings).toMatchObject({ floodedCount: 5, total: 20 });
+  });
+
+  it("does not return the one-pager HTML to the agent (avoids flooding context)", async () => {
+    const bigHtml = "<html>" + "x".repeat(2_000_000) + "</html>";
+    const control = {
+      buildOnePagerForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "One-pager ready and downloaded.",
+        filename: "opera-one-pager.html",
+        html: bigHtml,
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const result = (await tools
+      .find((t) => t.name === "build_one_pager")!
+      ._callback({})) as Record<string, unknown>;
+    expect(result.html).toBeUndefined();
+    expect(result.filename).toBe("opera-one-pager.html");
+    expect(result.bytes).toBe(bigHtml.length);
   });
 
   it("forwards search and display inputs to the OPERA control", async () => {

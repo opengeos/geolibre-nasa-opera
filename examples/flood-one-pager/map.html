@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<link href="./maplibre-gl.css" rel="stylesheet"/>
+<script src="./maplibre-gl.js"></script>
+<style>
+  html,body{margin:0;height:100%}
+  #map{width:900px;height:640px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+  const cfg = window.__CFG__;   // injected by capture-map.mjs
+  const bbox = cfg.bbox;        // [w,s,e,n]
+  const map = new maplibregl.Map({
+    container: "map",
+    style: {
+      version: 8,
+      sources: {
+        osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256 },
+      },
+      layers: [{ id: "osm", type: "raster", source: "osm" }],
+    },
+    bounds: [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+    fitBoundsOptions: { padding: 40, animate: false },
+    attributionControl: false,
+  });
+  window.__ready = false;
+  map.on("load", () => {
+    // OPERA DSWx surface-water raster layers (one per granule).
+    (cfg.dswxTiles || []).forEach((url, i) => {
+      const id = "dswx-" + i;
+      map.addSource(id, { type: "raster", tiles: [url], tileSize: 512 });
+      map.addLayer({ id, type: "raster", source: id, paint: { "raster-opacity": 0.85 } });
+    });
+    // Flooded buildings (benchmark ∩ OSM).
+    if (cfg.buildings && cfg.buildings.features && cfg.buildings.features.length) {
+      map.addSource("bldg", { type: "geojson", data: cfg.buildings });
+      map.addLayer({ id: "bldg-fill", type: "fill", source: "bldg",
+        paint: { "fill-color": "#e11d48", "fill-opacity": 0.85 } });
+      map.addLayer({ id: "bldg-line", type: "line", source: "bldg",
+        paint: { "line-color": "#e11d48", "line-width": 0.5 } });
+    }
+    // QAed benchmark extent — outline only so DSWx shows through.
+    map.addSource("water", { type: "geojson", data: cfg.water });
+    map.addLayer({ id: "water-line", type: "line", source: "water",
+      paint: { "line-color": cfg.fill || "#2b7fff", "line-width": 3 } });
+    map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, animate: false });
+    map.once("idle", () => { window.__ready = true; });
+  });
+</script>
+</body>
+</html>
