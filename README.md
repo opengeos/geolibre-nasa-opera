@@ -245,10 +245,19 @@ map or uncited impact numbers:
    - `buildings_in_flood` intersects the benchmark with OSM building footprints
      (via the public Overpass API — no proxy needed) to quantify exposure.
    - `news_impact_search` returns quantified impact figures **with source URLs +
-     dates**; the agent is instructed to report only citable numbers.
-   - `build_one_pager` assembles a self-contained HTML one-pager (map snapshot +
-     legend/scale bar + building exposure + cited impacts + narrative) and
-     downloads it. It is print/PDF-ready and screenshots cleanly for social.
+     dates**; the agent is instructed to report only citable numbers. It defaults
+     to a retrospective `general` search so events older than a few days remain
+     reachable (a locked benchmark is QAed after the event); the agent can still
+     request fresh journalistic coverage with `topic: "news"` and a `days` window.
+   - To show the OPERA-observed flood behind the benchmark, the agent displays
+     DSWx (`OPERA_L3_DSWX-HLS_V1`, band `B01_WTR`) for the event dates with
+     `water_only=true` — open water + partial surface water stay visible while
+     cloud/ocean/no-data become transparent, so stacked post-event scenes don't
+     bury the map under grey cloud.
+   - `build_one_pager` assembles a self-contained HTML one-pager (map snapshot
+     with the DSWx layer, flooded buildings, and benchmark outline + legend/scale
+     bar + building exposure + cited impacts + narrative) and downloads it. It is
+     print/PDF-ready and screenshots cleanly for social.
 
 ### News search proxy (Tavily)
 
@@ -264,6 +273,16 @@ Point the plugin at the deployed Worker with the `VITE_NEWS_PROXY_ENDPOINT`
 build variable, or the `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` window global.
 Without it, `news_impact_search` returns a clear "not configured" message and the
 rest of the workflow (benchmark, buildings, one-pager) still works.
+
+The Worker fails closed: `ALLOWED_ORIGINS` defaults to `http://localhost:5173`
+(set it to your deployed origin(s), or `*` only if you intentionally want any
+origin to use the proxy). To keep the proxy from being an open Tavily relay for
+non-browser clients, optionally set a `CLIENT_SECRET` secret and have callers
+send a matching `X-Client-Secret` header:
+
+```bash
+npx wrangler secret put CLIENT_SECRET --config wrangler.news.toml
+```
 
 ## Build and install
 
@@ -317,6 +336,11 @@ Key source files:
   product against your titiler-cmr endpoint.
 - Browser-side model credentials are appropriate for trusted sessions. For
   public deployments, configure provider access through a backend proxy.
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for shipped capabilities and what's under
+consideration next.
 
 ## License
 
