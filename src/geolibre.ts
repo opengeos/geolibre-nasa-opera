@@ -87,6 +87,15 @@ function createControl(app: AppAPI): OperaControl {
     addGeoJsonLayer: (name, data) => app.addGeoJsonLayer?.(name, data),
     registerLayer: (layer) => app.registerExternalNativeLayer?.(layer),
     unregisterLayer: (id) => app.unregisterExternalNativeLayer?.(id),
+    ...(app.addLayerGroup
+      ? {
+          addLayerGroup: (name: string, layerIds?: string[]) =>
+            app.addLayerGroup?.(name, layerIds) ?? "",
+        }
+      : {}),
+    ...(app.removeLayerGroup
+      ? { removeLayerGroup: (id: string) => app.removeLayerGroup?.(id) }
+      : {}),
     activatePlugin: async (pluginId, state) =>
       (await app.activatePlugin?.(pluginId, state)) ?? false,
     queryOvertureFeatures: (query) => {

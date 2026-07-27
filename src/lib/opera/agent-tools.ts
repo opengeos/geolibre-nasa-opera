@@ -16,12 +16,12 @@ import {
 export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available for searching and visualizing OPERA satellite products.
 
 Mandatory disaster-request routing:
-- A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster MUST use the OPERA disaster tools. Navigating the map or adding a basemap is preparation, not completion. Do not give a final answer until at least one OPERA disaster tool has run, or until a tool returns a concrete error that you report.
-- Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. Open-access Sentinel-2 event imagery must come from sentinel2_event_imagery, not a generic satellite basemap.
-- After navigating to a named place, continue with the current map extent as the AOI. For every disaster type, call map_disaster_context so Overture buildings, transportation, and WorldPop population are added even when quantified exposure is not yet possible.
+- A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster MUST call map_disaster_event. The user only needs to provide a location and event date or date range; infer the standard data workflow and do not ask them to name OPERA, Sentinel-2, Overture, WorldPop, or individual tools. Navigating the map or adding a basemap is preparation, not completion.
+- Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. map_disaster_event adds open-access pre/post Sentinel-2 imagery automatically; use sentinel2_event_imagery only for an explicit standalone imagery request.
+- After navigating to a named place, continue with the current map extent as the AOI and call map_disaster_event once with hazard, place, start, and end. The composite tool adds the correct contextual and impact layers automatically.
 - If dates are omitted but the hazard and place clearly identify a well-known historical event, use the event's established date window and state that assumption. Do not stop to request confirmation merely because dates were omitted. For example, "Flood in Valencia Region, Spain" refers to the late-October 2024 DANA flood; use 2024-10-27 through 2024-11-05 unless the user specifies another event.
 - If the event remains genuinely ambiguous, call map_disaster_context first, explain that those layers are contextual, then ask for the missing date or event identifier. Never claim that a disaster was mapped after only add_basemap or zoom_to_bounds.
-- For a flood with an event window, run derive_flood_benchmark, then overture_in_flood and population_in_flood after the benchmark succeeds, and sentinel2_event_imagery for optical context. Also call map_disaster_context before or during this workflow so baseline exposure layers are present.
+- For a flood with an event window, map_disaster_event runs the complete workflow. Do not replace it with a hand-assembled subset of derive_flood_benchmark, overture_in_flood, population_in_flood, or sentinel2_event_imagery.
 
 Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surface water, SAR backscatter, or disturbance data.
 - Prefer search_and_display_opera when the user asks to find/show/display OPERA data in one request.
@@ -41,19 +41,19 @@ Advanced titiler-cmr tools are also available for backend-aware analysis beyond 
 - Use titiler_cmr_timeseries_tilejson for time-indexed TileJSON responses.
 
 Disaster mapping workflow:
-- Identify the hazard, place, and event dates before selecting data. Use OPERA DSWx for floods, OPERA DISP-S1 for displacement associated with earthquakes, volcanic unrest, and landslides, and OPERA DIST for surface disturbance context.
+- Identify the hazard, place, and event dates, then call map_disaster_event. It selects the standard datasets and runs the workflow.
 - Only call assets or people "impacted" when a hazard extent is available. Overture and population layers without a hazard intersection are context layers, not measured impacts.
-- Call sentinel2_event_imagery with the event AOI and date window to add low-cloud, open-access Sentinel-2 true-color context from Microsoft Planetary Computer. Treat optical imagery as visual context unless a separate analysis quantifies change.
-- For non-flood disasters, call map_disaster_context after displaying the relevant OPERA product. It activates GeoLibre's Overture building and transportation layers and adds WorldPop context for the event AOI.
-- The complete automated exposure workflow below is available for floods because OPERA DSWx supplies a polygonal observed-water extent. For other hazards, display the relevant OPERA product and map contextual Overture/population data, but explain that quantified exposure requires an authoritative hazard polygon.
+- map_disaster_event uses OPERA DSWx for floods and adds pre/post Sentinel-2 true-color context from Microsoft Planetary Computer. Treat optical imagery as visual context unless a separate analysis quantifies change.
+- For non-flood disasters, map_disaster_event adds contextual Overture and WorldPop layers and explains that quantified exposure requires an authoritative hazard polygon.
 
-Flood impact mapping and one-pager workflow. Two ways to get the flood extent:
-- If the user gives a place/AOI + a date range but NO benchmark is locked, call derive_flood_benchmark(bbox, start, end, event_name?, place?) first. It searches OPERA DSWx-HLS, renders the observed open/partial surface water on the map, vectorizes it, and locks it as an OPERA-DERIVED benchmark. If the user gives a place name but no bbox, navigate/zoom the map to the place first (MapLibre tools) so the current extent is the AOI, or pass a bbox. This is the "just space + time" path.
+Flood impact mapping and one-pager workflow:
+- For a normal place/AOI + date request, call map_disaster_event. It searches and groups pre-event OPERA DSWx, derives and groups post-event observed water, adds grouped pre/post Sentinel-2, maps all AOI Overture buildings and transportation, highlights flooded buildings and affected roads, and calculates WorldPop exposure.
+- Use derive_flood_benchmark, overture_in_flood, population_in_flood, and sentinel2_event_imagery directly only for explicit step-by-step requests or recovery from a failed composite step.
 - If a human-QAed benchmark is already locked (check get_opera_context or get_benchmark), it is the AUTHORITATIVE ground truth; prefer it over deriving one.
 When a benchmark is locked (either kind), follow these rules strictly:
 - Treat the locked benchmark water polygon as ground truth. Never recompute, redraw, or override a human-QAed benchmark. A benchmark derived by derive_flood_benchmark is OPERA-observed (not human-QAed); describe it as such in the one-pager and do not present it as validated ground truth.
-- Operate only within the benchmark bbox. Frame every spatial answer relative to the flooded area it defines.
-- Call overture_in_flood to activate GeoLibre's existing Overture Maps plugin, show styled building/transportation context, calculate flooded building counts, clip transportation to the flood extent, and add interactive impact layers. Never invent counts or lengths; report only the tool result. If the host lacks Overture query support, use buildings_in_flood as the OSM fallback.
+- Use the requested AOI for contextual data and the benchmark polygon for exposure intersections. Frame every impact statement relative to the flooded area it defines.
+- overture_in_flood activates GeoLibre's existing Overture Maps plugin, shows all AOI building/transportation context, calculates flooded building counts, clips road centerlines to the flood extent, and adds interactive impact layers. Never invent counts or lengths; report only the tool result. If the host lacks Overture query support, use buildings_in_flood as the OSM fallback.
 - Call population_in_flood to calculate WorldPop modeled residential population within the flood extent and add a styled 100 m population layer. Describe the result as modeled population exposure, never as deaths, evacuations, or displacement.
 - Call sentinel2_event_imagery for the flood event window before the final map snapshot. If no suitably low-cloud scene is available, report that limitation rather than substituting an unrelated date.
 - To gather event impacts, call news_impact_search and report ONLY figures you can attribute to a returned source_url, always with publisher and date. If a figure has no citable source, omit it.
@@ -380,6 +380,19 @@ const disasterContextSchema = z.object({
   add_population_layer: z.boolean().optional(),
 });
 
+const disasterEventSchema = z.object({
+  hazard: z
+    .string()
+    .describe(
+      "Disaster type inferred from the request, e.g. flood or wildfire.",
+    ),
+  place: z.string().optional().describe("Place name supplied by the user."),
+  event_name: z.string().optional().describe("Concise human event label."),
+  bbox: bboxSchema,
+  start: z.string().describe("Inclusive event start date, YYYY-MM-DD."),
+  end: z.string().describe("Inclusive event end date, YYYY-MM-DD."),
+});
+
 const sentinel2ImagerySchema = z.object({
   bbox: bboxSchema,
   start: z.string().describe("Inclusive imagery search start, YYYY-MM-DD."),
@@ -394,6 +407,7 @@ const sentinel2ImagerySchema = z.object({
 });
 
 const overtureInFloodSchema = z.object({
+  bbox: bboxSchema,
   add_layers: z
     .boolean()
     .optional()
@@ -759,6 +773,23 @@ export function createOperaAgentTools(
       },
     }),
     tool({
+      name: "map_disaster_event",
+      description:
+        "Run the complete default disaster workflow from only hazard, place/AOI, and dates. For floods this automatically adds grouped pre/post OPERA DSWx and Sentinel-2 imagery, derives observed flood water, maps all AOI Overture buildings and transportation with affected buildings/roads highlighted, and calculates WorldPop exposure. Use this for every user request to map a disaster; users do not need to specify datasets or workflow steps.",
+      inputSchema: disasterEventSchema,
+      callback: async (input) =>
+        toJsonValue(
+          await controlOrThrow().mapDisasterEventForAgent({
+            hazard: input.hazard,
+            place: input.place,
+            eventName: input.event_name,
+            bbox: input.bbox as BBox | string | undefined,
+            start: input.start,
+            end: input.end,
+          }),
+        ),
+    }),
+    tool({
       name: "map_disaster_context",
       description:
         "Map Overture buildings and transportation plus WorldPop population for any disaster AOI. These are contextual layers, not measured impacts, until a hazard extent is available. Use after displaying the relevant OPERA hazard product for non-flood disasters.",
@@ -836,6 +867,7 @@ export function createOperaAgentTools(
       callback: async (input) =>
         toJsonValue(
           await controlOrThrow().overtureInFloodForAgent({
+            bbox: input.bbox as BBox | string | undefined,
             addLayers: input.add_layers,
             computeBuildingArea: input.compute_building_area,
             maxTiles: input.max_tiles,

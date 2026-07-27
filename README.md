@@ -175,6 +175,9 @@ The NASA OPERA plugin registers OPERA-specific agent tools:
   or GeoJSON geometry.
 - `titiler_cmr_timeseries_tilejson` — request time-indexed TileJSON responses
   for temporal rasterio/xarray workflows.
+- `map_disaster_event` runs the standard disaster workflow from only a hazard,
+  place or AOI, and event dates. Flood requests add grouped pre/post OPERA and
+  Sentinel-2 layers, Overture context and impacts, and WorldPop exposure.
 - `map_disaster_context` maps the existing GeoLibre Overture building and
   transportation layers plus WorldPop population for any disaster AOI.
 - `sentinel2_event_imagery` searches the public Microsoft Planetary Computer
@@ -216,9 +219,7 @@ to the map.
 ```
 
 ```text
-Map the October 2024 flood in Valencia Region, Spain. Use OPERA DSWx to derive
-the flood extent, then analyze Overture buildings and transportation plus
-WorldPop population exposure. Add all results to the map with clear styling.
+Map the flood in Valencia Region, Spain from 2024-10-27 to 2024-11-05.
 ```
 
 This is a browser-side agent: provider SDKs run in the browser and send prompts
@@ -249,14 +250,13 @@ bundled and the panel falls back to manual key entry.
 
 ## Disaster impact mapping and flood one-pager
 
-For any mapped disaster AOI, `map_disaster_context` activates GeoLibre's existing
-Overture Maps building and transportation layers and adds open-access WorldPop
-population context. The agent first displays the relevant OPERA product, such as
-DSWx for floods, DISP-S1 for displacement, or DIST for surface disturbance.
-It also calls `sentinel2_event_imagery` to add open Sentinel-2 true-color context
-from Microsoft Planetary Computer. Contextual assets and optical imagery are not
-labeled as impacted unless a hazard extent or a separate change analysis is
-available.
+For a location and event date or date range, `map_disaster_event` runs the
+standard workflow without requiring the user to name datasets or analysis
+steps. Flood requests create separate pre/post OPERA and Sentinel-2 layer
+groups, map all Overture buildings and typed transportation in the requested
+AOI, highlight flooded buildings and affected roads, and calculate open-access
+WorldPop exposure. Contextual assets and optical imagery are not labeled as
+impacted unless a hazard extent or separate change analysis is available.
 
 Floods support a complete exposure workflow because OPERA DSWx can provide a
 polygonal observed-water extent. A supervised workflow turns that extent, or a

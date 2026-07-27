@@ -24,6 +24,7 @@ describe("OPERA agent tools", () => {
       "titiler_cmr_point_query",
       "titiler_cmr_statistics",
       "titiler_cmr_timeseries_tilejson",
+      "map_disaster_event",
       "map_disaster_context",
       "sentinel2_event_imagery",
       "get_benchmark",
@@ -41,6 +42,7 @@ describe("OPERA agent tools", () => {
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("analyze_opera_time_series");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("OPERA_L3_DSWX-HLS_V1");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("benchmark");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("map_disaster_event");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("map_disaster_context");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("sentinel2_event_imagery");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("overture_in_flood");
@@ -65,6 +67,12 @@ describe("OPERA agent tools", () => {
 
   it("forwards benchmark workflow inputs to the control", async () => {
     const control = {
+      mapDisasterEventForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Mapped complete disaster event.",
+        hazard: "flood",
+        warnings: [],
+      })),
       getBenchmarkForAgent: vi.fn(() => ({
         ok: true,
         status: "Benchmark locked",
@@ -130,6 +138,25 @@ describe("OPERA agent tools", () => {
     }>;
 
     await tools
+      .find((t) => t.name === "map_disaster_event")!
+      ._callback({
+        hazard: "flood",
+        place: "Valencia Region, Spain",
+        event_name: "Valencia DANA flood",
+        bbox: [-0.95, 39.1, -0.05, 39.8],
+        start: "2024-10-27",
+        end: "2024-11-05",
+      });
+    expect(control.mapDisasterEventForAgent).toHaveBeenCalledWith({
+      hazard: "flood",
+      place: "Valencia Region, Spain",
+      eventName: "Valencia DANA flood",
+      bbox: [-0.95, 39.1, -0.05, 39.8],
+      start: "2024-10-27",
+      end: "2024-11-05",
+    });
+
+    await tools
       .find((t) => t.name === "map_disaster_context")!
       ._callback({
         hazard: "earthquake",
@@ -178,12 +205,14 @@ describe("OPERA agent tools", () => {
     await tools
       .find((t) => t.name === "overture_in_flood")!
       ._callback({
+        bbox: [-1, -2, 3, 4],
         add_layers: true,
         compute_building_area: true,
         max_tiles: 256,
         max_features: 50_000,
       });
     expect(control.overtureInFloodForAgent).toHaveBeenCalledWith({
+      bbox: [-1, -2, 3, 4],
       addLayers: true,
       computeBuildingArea: true,
       maxTiles: 256,

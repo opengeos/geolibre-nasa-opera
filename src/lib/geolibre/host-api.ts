@@ -105,6 +105,8 @@ export interface GeoLibreNativeLayerRegistration {
   id: string;
   /** Human-readable name shown in the host's layer list. */
   name: string;
+  /** Optional host layer-group id that should contain this layer. */
+  groupId?: string;
   /** GeoLibre layer type, e.g. "raster" or "geojson". */
   type?: string;
   /** MapLibre source definition the host should create (e.g. raster tiles). */
@@ -266,6 +268,10 @@ export interface GeoLibreAppAPI<
   queryOvertureFeatures?: (
     query: GeoLibreOvertureQuery,
   ) => Promise<GeoLibreOvertureQueryResult>;
+  /** Create a named host layer group and return its id. */
+  addLayerGroup?: (name?: string, layerIds?: string[]) => string;
+  /** Remove a host layer group without removing its child layers. */
+  removeLayerGroup?: (id: string) => void;
   /** Fit the map view to a `[west, south, east, north]` bounding box. */
   fitBounds?: (bounds: [number, number, number, number]) => void;
   /** Return the raw MapLibre map instance (e.g. to read the current extent). */

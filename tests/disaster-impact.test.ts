@@ -129,6 +129,20 @@ describe("disaster impact control", () => {
                   ],
                 },
               },
+              {
+                type: "Feature",
+                properties: {
+                  _overture_id: "ferry-1",
+                  subtype: "water",
+                },
+                geometry: {
+                  type: "LineString",
+                  coordinates: [
+                    [-10, 0.5],
+                    [10, 0.5],
+                  ],
+                },
+              },
             ],
           }),
     );
@@ -140,6 +154,7 @@ describe("disaster impact control", () => {
     control.lockBenchmarkFromGeoJson(water, { name: "Test flood" });
 
     const result = await control.overtureInFloodForAgent({
+      bbox: [-2, -1, 3, 2],
       addLayers: true,
       computeBuildingArea: true,
     });
@@ -153,13 +168,40 @@ describe("disaster impact control", () => {
     });
     expect(result.buildings.floodedAreaKm2).toBeGreaterThan(0);
     expect(result.transportation.impactedSegmentCount).toBe(1);
+    expect(result.transportation.candidateSegments).toBe(1);
+    expect(result.transportation.bySubtype).toEqual({ road: 1 });
     expect(result.transportation.impactedLengthKm).toBeGreaterThan(110);
     expect(activatePlugin).toHaveBeenCalledWith(
       "maplibre-gl-overture-maps",
-      expect.objectContaining({ inspect: true }),
+      expect.objectContaining({
+        inspect: true,
+        themes: expect.objectContaining({
+          buildings: expect.objectContaining({
+            layers: expect.objectContaining({
+              building: expect.objectContaining({ visible: false }),
+            }),
+          }),
+          transportation: expect.objectContaining({
+            layers: expect.objectContaining({
+              segment: expect.objectContaining({ visible: false }),
+            }),
+          }),
+        }),
+      }),
     );
     expect(queryOvertureFeatures).toHaveBeenCalledTimes(2);
-    expect(addGeoJsonLayer).toHaveBeenCalledTimes(3);
+    expect(queryOvertureFeatures).toHaveBeenCalledWith(
+      expect.objectContaining({
+        theme: "buildings",
+        bbox: [-2, -1, 3, 2],
+      }),
+    );
+    expect(queryOvertureFeatures).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        filterGeometry: expect.anything(),
+      }),
+    );
+    expect(addGeoJsonLayer).toHaveBeenCalledTimes(6);
   });
 
   it("does not report partial Overture exposure when a query is truncated", async () => {
@@ -216,6 +258,40 @@ describe("disaster impact control", () => {
     expect(result.status).toContain("modeled residential population");
   });
 
+  it("keeps the WorldPop map layer when exposure statistics fail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("statistics unavailable");
+      }),
+    );
+    const registerLayer = vi.fn();
+    const control = new OperaControl({ registerLayer });
+    const { map, layers } = mapStub();
+    control.renderDocked(document.createElement("div"), map as never);
+    control.lockBenchmarkFromGeoJson(water, { name: "Test flood" });
+
+    const result = await control.populationInFloodForAgent({
+      addLayer: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      layerId: "opera-impact-worldpop",
+    });
+    expect(result.status).toContain("Added the WorldPop 2020 population layer");
+    expect(layers.has("opera-impact-worldpop-raster")).toBe(true);
+    expect(registerLayer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "opera-impact-worldpop",
+        metadata: expect.objectContaining({
+          sourceKind: "worldpop-population",
+        }),
+      }),
+    );
+    control.teardownDocked();
+  });
+
   it("registers styled impact layers with the GeoLibre host", async () => {
     vi.stubGlobal(
       "fetch",
@@ -231,6 +307,7 @@ describe("disaster impact control", () => {
       ),
     );
     const registerLayer = vi.fn();
+    const addLayerGroup = vi.fn(() => "overture-group");
     const queryOvertureFeatures = vi.fn(async (query: GeoLibreOvertureQuery) =>
       query.theme === "buildings"
         ? queryResult("buildings", "building", {
@@ -257,6 +334,8 @@ describe("disaster impact control", () => {
     const control = new OperaControl({
       registerLayer,
       unregisterLayer: vi.fn(),
+      addLayerGroup,
+      removeLayerGroup: vi.fn(),
       queryOvertureFeatures,
     });
     const { map, layers } = mapStub();
@@ -277,15 +356,31 @@ describe("disaster impact control", () => {
       "line-opacity": 0.92,
       "line-width": 3,
     });
+    expect(layers.get("opera-context-overture-road-line")?.paint).toEqual({
+      "line-color": "#475569",
+      "line-opacity": 0.5,
+      "line-width": 1.2,
+    });
     expect(layers.get("opera-impact-worldpop-raster")?.paint).toEqual({
       "raster-opacity": 0.55,
       "raster-resampling": "linear",
     });
     expect(registerLayer.mock.calls.map(([layer]) => layer.id)).toEqual([
+      "opera-context-overture-buildings",
+      "opera-context-overture-road",
       "opera-impact-overture-buildings",
       "opera-impact-overture-transportation",
       "opera-impact-worldpop",
     ]);
+    expect(addLayerGroup).toHaveBeenCalledWith(
+      "Overture exposure - Styled flood",
+      [
+        "opera-context-overture-buildings",
+        "opera-context-overture-road",
+        "opera-impact-overture-buildings",
+        "opera-impact-overture-transportation",
+      ],
+    );
     control.teardownDocked();
   });
 
@@ -356,6 +451,177 @@ describe("disaster impact control", () => {
           itemId: "S2_TEST",
         }),
       }),
+    );
+  });
+
+  it("groups automatic pre-event Sentinel-2 imagery separately", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/stac/v1/search")) {
+          return new Response(
+            JSON.stringify({
+              features: [
+                {
+                  id: "S2_PRE",
+                  bbox: [0, 0, 1, 1],
+                  properties: {
+                    datetime: "2024-10-20T10:00:00Z",
+                    "eo:cloud_cover": 2,
+                  },
+                  assets: {
+                    tilejson: {
+                      href: "https://tiles.example/sentinel-2-pre.json",
+                    },
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            tiles: ["https://tiles.example/{z}/{x}/{y}.png"],
+            bounds: [0, 0, 1, 1],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const addLayerGroup = vi.fn(() => "sentinel-pre-group");
+    const registerLayer = vi.fn();
+    const control = new OperaControl({ addLayerGroup, registerLayer });
+
+    const result = await control.sentinel2ImageryForAgent({
+      bbox: [0, 0, 1, 1],
+      start: "2024-09-27",
+      end: "2024-10-26",
+      period: "pre-event",
+      eventName: "Valencia flood",
+    });
+
+    expect(result.layerId).toBe("sentinel-2-pre-event-S2-PRE");
+    expect(addLayerGroup).toHaveBeenCalledWith(
+      "Pre-event Sentinel-2 - Valencia flood",
+      ["sentinel-2-pre-event-S2-PRE"],
+    );
+    expect(registerLayer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "sentinel-2-pre-event-S2-PRE",
+        metadata: expect.objectContaining({ period: "pre-event" }),
+      }),
+    );
+  });
+
+  it("runs the full flood workflow from place and dates", async () => {
+    const addLayerGroup = vi.fn((name: string) => `group-${name}`);
+    const control = new OperaControl({ addLayerGroup });
+    vi.spyOn(control, "searchForAgent").mockResolvedValue({
+      ok: true,
+      status: "Found pre-event OPERA.",
+      product: "OPERA_L3_DSWX-HLS_V1",
+      granules: [{ id: "PRE", bands: ["B01_WTR"], linkCount: 1 }],
+    });
+    vi.spyOn(control, "displayForAgent").mockResolvedValue({
+      ok: true,
+      status: "Displayed pre-event OPERA.",
+      product: "OPERA_L3_DSWX-HLS_V1",
+      granules: [],
+      displayedLayerIds: ["opera-pre"],
+      selectedGranuleIds: ["PRE"],
+    });
+    vi.spyOn(control, "deriveFloodBenchmarkForAgent").mockResolvedValue({
+      ok: true,
+      status: "Derived flood.",
+      dswxLayerIds: ["opera-post"],
+      granulesUsed: 1,
+    });
+    vi.spyOn(control, "sentinel2ImageryForAgent").mockImplementation(
+      async (params) => ({
+        ok: true,
+        status: `Added ${params.period}.`,
+        provider: "Sentinel-2",
+        layerId: `sentinel-${params.period}`,
+      }),
+    );
+    vi.spyOn(control, "overtureInFloodForAgent").mockResolvedValue({
+      ok: true,
+      status: "Mapped Overture exposure.",
+      contextPluginActivated: true,
+      layerIds: ["buildings", "roads"],
+      buildings: {
+        total: 10,
+        floodedCount: 2,
+        fraction: 0.2,
+        source: "Overture Maps",
+      },
+      transportation: {
+        candidateSegments: 5,
+        impactedSegmentCount: 1,
+        impactedLengthKm: 2,
+        bySubtype: { road: 1 },
+        source: "Overture Maps roads",
+      },
+    });
+    vi.spyOn(control, "populationInFloodForAgent").mockResolvedValue({
+      ok: true,
+      status: "Mapped population.",
+      totalPopulation: 100,
+      year: 2020,
+      source: "WorldPop",
+    });
+
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "flood",
+      place: "Valencia Region, Spain",
+      bbox: [-0.95, 39.1, -0.05, 39.8],
+      start: "2024-10-27",
+      end: "2024-11-05",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.windows).toEqual({
+      preEvent: { start: "2024-09-27", end: "2024-10-26" },
+      event: { start: "2024-10-27", end: "2024-11-05" },
+      postEvent: { start: "2024-11-05", end: "2024-11-19" },
+    });
+    expect(control.deriveFloodBenchmarkForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        start: "2024-10-27",
+        end: "2024-11-05",
+        place: "Valencia Region, Spain",
+      }),
+    );
+    expect(control.sentinel2ImageryForAgent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        period: "pre-event",
+        start: "2024-09-27",
+        end: "2024-10-26",
+      }),
+    );
+    expect(control.sentinel2ImageryForAgent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        period: "post-event",
+        start: "2024-11-05",
+        end: "2024-11-19",
+      }),
+    );
+    expect(control.overtureInFloodForAgent).toHaveBeenCalledWith({
+      bbox: [-0.95, 39.1, -0.05, 39.8],
+      addLayers: true,
+      computeBuildingArea: true,
+      maxFeatures: 250_000,
+    });
+    expect(addLayerGroup).toHaveBeenCalledWith(
+      "Pre-event OPERA - Valencia Region, Spain flood",
+      ["opera-pre"],
+    );
+    expect(addLayerGroup).toHaveBeenCalledWith(
+      "Post-event OPERA - Valencia Region, Spain flood",
+      ["opera-post"],
     );
   });
 });
