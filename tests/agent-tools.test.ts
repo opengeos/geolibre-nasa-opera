@@ -51,6 +51,9 @@ describe("OPERA agent tools", () => {
       "Navigating the map or adding a basemap is preparation, not completion",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "automatically downloads a one-page flood assessment",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "use 2024-10-27 through 2024-11-05",
     );
   });

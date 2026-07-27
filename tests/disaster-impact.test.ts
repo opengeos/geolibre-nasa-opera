@@ -575,6 +575,11 @@ describe("disaster impact control", () => {
       year: 2020,
       source: "WorldPop",
     });
+    vi.spyOn(control, "buildOnePagerForAgent").mockResolvedValue({
+      ok: true,
+      status: "One-pager ready and downloaded.",
+      filename: "opera-one-pager-valencia-region-spain-flood.html",
+    });
 
     const result = await control.mapDisasterEventForAgent({
       hazard: "flood",
@@ -633,6 +638,36 @@ describe("disaster impact control", () => {
       computeBuildingArea: true,
       maxFeatures: 250_000,
     });
+    expect(control.buildOnePagerForAgent).toHaveBeenCalledWith({
+      buildings: {
+        floodedCount: 2,
+        total: 10,
+        fraction: 0.2,
+        floodedAreaKm2: undefined,
+        source: "Overture Maps",
+      },
+      population: {
+        totalPopulation: 100,
+        year: 2020,
+        source: "WorldPop",
+      },
+      transportation: {
+        impactedSegmentCount: 1,
+        impactedLengthKm: 2,
+        source: "Overture Maps roads",
+      },
+      download: true,
+    });
+    expect(
+      vi.mocked(control.populationInFloodForAgent).mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      vi.mocked(control.buildOnePagerForAgent).mock.invocationCallOrder[0],
+    );
+    expect(result.onePager).toMatchObject({
+      ok: true,
+      filename: "opera-one-pager-valencia-region-spain-flood.html",
+    });
+    expect(result.status).toContain("one-pager was downloaded");
     expect(addLayerGroup).toHaveBeenCalledWith(
       "Pre-event OPERA - Valencia Region, Spain flood",
       ["opera-pre"],
