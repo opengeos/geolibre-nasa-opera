@@ -255,7 +255,10 @@ export interface GeoLibreAppAPI<
    * Activate another built-in plugin and optionally apply a partial state.
    * Returns false when the target plugin is unavailable or rejects the state.
    */
-  activatePlugin?: (pluginId: string, state?: unknown) => boolean;
+  activatePlugin?: (
+    pluginId: string,
+    state?: unknown,
+  ) => boolean | Promise<boolean>;
   /**
    * Read a bounded set of decoded Overture features from the host's official
    * PMTiles source. The host enforces tile and feature limits.

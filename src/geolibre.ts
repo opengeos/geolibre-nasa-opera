@@ -87,8 +87,8 @@ function createControl(app: AppAPI): OperaControl {
     addGeoJsonLayer: (name, data) => app.addGeoJsonLayer?.(name, data),
     registerLayer: (layer) => app.registerExternalNativeLayer?.(layer),
     unregisterLayer: (id) => app.unregisterExternalNativeLayer?.(id),
-    activatePlugin: (pluginId, state) =>
-      app.activatePlugin?.(pluginId, state) ?? false,
+    activatePlugin: async (pluginId, state) =>
+      (await app.activatePlugin?.(pluginId, state)) ?? false,
     queryOvertureFeatures: (query) => {
       if (!app.queryOvertureFeatures) {
         return Promise.reject(

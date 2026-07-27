@@ -122,7 +122,10 @@ export interface OperaControlOptions {
   /** Remove a previously registered native layer by id. */
   unregisterLayer?: (id: string) => void;
   /** Activate another GeoLibre plugin and optionally apply a partial state. */
-  activatePlugin?: (pluginId: string, state?: unknown) => boolean;
+  activatePlugin?: (
+    pluginId: string,
+    state?: unknown,
+  ) => boolean | Promise<boolean>;
   /** Query bounded official Overture PMTiles through the GeoLibre host. */
   queryOvertureFeatures?: (
     query: GeoLibreOvertureQuery,
@@ -1697,7 +1700,8 @@ export class OperaControl implements IControl {
     }
 
     this.expand();
-    const contextPluginActivated = this._activateOvertureDisasterContext();
+    const contextPluginActivated =
+      await this._activateOvertureDisasterContext();
 
     this._setStatus("Querying Overture buildings and transportation…");
     const query = this._options.queryOvertureFeatures;
@@ -1904,7 +1908,8 @@ export class OperaControl implements IControl {
 
     this.expand();
     this._options.fitBounds?.(bbox);
-    const overtureContextActivated = this._activateOvertureDisasterContext();
+    const overtureContextActivated =
+      await this._activateOvertureDisasterContext();
     const year = params.populationYear ?? WORLDPOP_LATEST_YEAR;
     const [west, south, east, north] = bbox;
     const area: GeoFeatureCollection = {
@@ -2186,10 +2191,10 @@ export class OperaControl implements IControl {
 
   // --- Layer registration ------------------------------------------------
 
-  private _activateOvertureDisasterContext(): boolean {
+  private async _activateOvertureDisasterContext(): Promise<boolean> {
     try {
       return (
-        this._options.activatePlugin?.("maplibre-gl-overture-maps", {
+        (await this._options.activatePlugin?.("maplibre-gl-overture-maps", {
           collapsed: true,
           inspect: true,
           themes: {
@@ -2218,7 +2223,7 @@ export class OperaControl implements IControl {
               },
             },
           },
-        }) ?? false
+        })) ?? false
       );
     } catch {
       return false;
