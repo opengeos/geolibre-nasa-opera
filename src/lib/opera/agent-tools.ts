@@ -18,7 +18,7 @@ export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available 
 Mandatory disaster-request routing:
 - A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster MUST call map_disaster_event. The user only needs to provide a location and event date or date range; infer the standard data workflow and do not ask them to name OPERA, Sentinel-2, Overture, WorldPop, or individual tools. Navigating the map or adding a basemap is preparation, not completion.
 - Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. map_disaster_event adds open-access pre/post Sentinel-2 imagery automatically; use sentinel2_event_imagery only for an explicit standalone imagery request.
-- After navigating to a named place, continue with the current map extent as the AOI and call map_disaster_event once with hazard, place, start, and end. The composite tool adds the correct contextual and impact layers automatically.
+- Call map_disaster_event once with hazard, place, start, and end. A user-drawn AOI is applied automatically and takes precedence over model-supplied bounds; otherwise omit bbox and let the composite tool resolve the named place. The composite tool adds the correct contextual and impact layers automatically.
 - If dates are omitted but the hazard and place clearly identify a well-known historical event, use the event's established date window and state that assumption. Do not stop to request confirmation merely because dates were omitted. For example, "Flood in Valencia Region, Spain" refers to the late-October 2024 DANA flood; use 2024-10-27 through 2024-11-05 unless the user specifies another event.
 - If the event remains genuinely ambiguous, call map_disaster_context first, explain that those layers are contextual, then ask for the missing date or event identifier. Never claim that a disaster was mapped after only add_basemap or zoom_to_bounds.
 - For a flood with an event window, map_disaster_event runs the complete workflow. Do not replace it with a hand-assembled subset of derive_flood_benchmark, overture_in_flood, population_in_flood, or sentinel2_event_imagery.
@@ -28,7 +28,7 @@ Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surfa
 - Use detect_opera_change_between_dates when the user asks to compare two dates, detect change, or create before/after OPERA layers.
 - Use analyze_opera_time_series when the user asks for trends, time-series change, repeated observations, or change over time.
 - Use export_opera_change_report after change detection when the user asks to export, save, summarize, or download the analysis.
-- If the user gives a place but not a bbox, use the current map extent unless you first navigate the map to the place with MapLibre tools.
+- If the user gives a place but not a bbox, pass the place to map_disaster_event so it can resolve a bounded AOI.
 - For surface water requests, prefer product OPERA_L3_DSWX-HLS_V1 and band B01_WTR unless the user asks for Sentinel-1 DSWx.
 - For SAR backscatter, prefer product OPERA_L2_RTC-S1_V1 and band VV unless the user asks for another polarization.
 - Keep max_granules small, usually 1-3, unless the user asks for many scenes.
@@ -388,7 +388,9 @@ const disasterEventSchema = z.object({
     ),
   place: z.string().optional().describe("Place name supplied by the user."),
   event_name: z.string().optional().describe("Concise human event label."),
-  bbox: bboxSchema,
+  bbox: bboxSchema.describe(
+    "Precise user-drawn AOI as [west,south,east,north]. Omit when no AOI was drawn; the tool resolves place automatically.",
+  ),
   start: z.string().describe("Inclusive event start date, YYYY-MM-DD."),
   end: z.string().describe("Inclusive event end date, YYYY-MM-DD."),
 });

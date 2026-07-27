@@ -60,6 +60,7 @@ import {
 } from "../opera/benchmark";
 import { fetchOsmBuildings } from "../opera/buildings";
 import { deriveFloodExtent } from "../opera/flood-extent";
+import { geocodePlaceBounds, type GeocodedPlace } from "../opera/geocode";
 import {
   buildingsInFlood,
   dedupeOvertureFeatures,
@@ -99,6 +100,8 @@ export interface OperaState {
   expression: string;
   /** titiler-cmr endpoint. */
   endpoint: string;
+  /** Precise user-drawn AOI used by composite agent workflows. */
+  agentAoiBBox?: BBox;
   /**
    * The human-QAed flood benchmark locked as the agent's authoritative
    * boundary. Persisted with the project so a locked benchmark survives reloads.
@@ -138,6 +141,10 @@ export interface OperaControlOptions {
   fitBounds?: (bounds: BBox) => void;
   /** Read the current map extent as a `[w, s, e, n]` box. */
   getMapBounds?: () => BBox | null;
+  /** Resolve a named place to a bounded disaster-analysis AOI. */
+  geocodePlace?: (place: string) => Promise<GeocodedPlace>;
+  /** Notify companion UI when the user-drawn agent AOI changes. */
+  onAgentAoiChange?: (bbox: BBox | undefined) => void;
   /** Initial titiler-cmr endpoint. Overrides runtime/build defaults. */
   defaultEndpoint?: string;
   /**
@@ -159,6 +166,10 @@ export interface OperaAgentSearchParams {
   end?: string;
   /** Max granules to request. */
   count?: number;
+  /** Add CMR catalog footprint overlays. Defaults to true. */
+  addFootprints?: boolean;
+  /** Fit the map to combined granule bounds. Defaults to true. */
+  fitBounds?: boolean;
 }
 
 export interface OperaAgentDisplayParams {
@@ -180,6 +191,10 @@ export interface OperaAgentDisplayParams {
    * one-pager) legible when several post-event scenes are stacked.
    */
   waterOnly?: boolean;
+  /** Fit the map to displayed granule bounds. Defaults to true. */
+  fitBounds?: boolean;
+  /** Restrict rendered raster tiles to this AOI. */
+  clipBounds?: BBox | string;
 }
 
 export interface OperaAgentChangeParams {
@@ -300,6 +315,8 @@ export interface OperaAgentTileLayerParams {
   metadata?: Record<string, unknown>;
   opacity?: number;
   fitBounds?: boolean;
+  /** Restrict the raster source to these bounds. */
+  bounds?: BBox;
 }
 
 /** Result of `getBenchmarkForAgent` / benchmark-gated tools. */
@@ -573,6 +590,9 @@ const BENCHMARK_REQUIRED =
 const HL_SRC = "opera-hl-src";
 const HL_FILL = "opera-hl-fill";
 const HL_LINE = "opera-hl-line";
+const AGENT_AOI_SRC = "opera-agent-aoi-src";
+const AGENT_AOI_FILL = "opera-agent-aoi-fill";
+const AGENT_AOI_LINE = "opera-agent-aoi-line";
 
 type BBoxFeature = {
   type: "Feature";
@@ -722,6 +742,7 @@ export class OperaControl implements IControl {
     this._attachMapInteractions();
     this._setupFloatingListeners();
     this._restoreBenchmarkLayer();
+    this._restoreAgentAoiLayer();
 
     if (!this._state.collapsed) {
       this._panel.classList.add("expanded");
@@ -780,6 +801,7 @@ export class OperaControl implements IControl {
       this._refreshSelectionUI();
     }
     this._restoreBenchmarkLayer();
+    this._restoreAgentAoiLayer();
     if (this._lastStatus) this._setStatus(this._lastStatus);
   }
 
@@ -811,6 +833,7 @@ export class OperaControl implements IControl {
       this._map.off("mousemove", this._onMapMouseMove);
     }
     this._removeHighlightLayers();
+    this._removeAgentAoiLayers();
     this._clearLayers();
   }
 
@@ -849,6 +872,37 @@ export class OperaControl implements IControl {
 
   setState(next: Partial<OperaState>): void {
     this._state = { ...this._state, ...next };
+    if (Object.prototype.hasOwnProperty.call(next, "agentAoiBBox")) {
+      const bbox = next.agentAoiBBox
+        ? normalizeAgentBBox(next.agentAoiBBox)
+        : undefined;
+      this._state.agentAoiBBox = bbox;
+      if (bbox) this._renderAgentAoiLayer(bbox);
+      else this._removeAgentAoiLayers();
+      this._options.onAgentAoiChange?.(bbox);
+    }
+  }
+
+  /** Return the precise AOI drawn for GeoAgent workflows, if any. */
+  getAgentAoi(): BBox | undefined {
+    return this._state.agentAoiBBox ? [...this._state.agentAoiBBox] : undefined;
+  }
+
+  /** Start or cancel rectangle drawing for the companion GeoAgent panel. */
+  toggleAgentAoiDraw(): boolean {
+    if (this._drawing) {
+      this._endDraw();
+      return false;
+    }
+    this._startDraw();
+    return this._drawing;
+  }
+
+  /** Remove the user-drawn GeoAgent AOI and its map outline. */
+  clearAgentAoi(): void {
+    this._state.agentAoiBBox = undefined;
+    this._removeAgentAoiLayers();
+    this._options.onAgentAoiChange?.(undefined);
   }
 
   toggle(): void {
@@ -887,6 +941,7 @@ export class OperaControl implements IControl {
     selectedGranuleIds: string[];
     endpoint: string;
     bbox: string;
+    agentAoiBBox?: BBox;
     start: string;
     end: string;
     benchmark: BenchmarkSummary | null;
@@ -898,6 +953,7 @@ export class OperaControl implements IControl {
       product: this._state.product,
       endpoint: this._state.endpoint,
       bbox: this._state.bbox,
+      agentAoiBBox: this.getAgentAoi(),
       start: this._state.start,
       end: this._state.end,
       selectedGranuleIds: [...this._selectedIds],
@@ -947,7 +1003,10 @@ export class OperaControl implements IControl {
       this._state.count = Math.min(Math.max(Math.round(params.count), 1), 500);
     }
     this._syncForm();
-    await this._onSearch();
+    await this._onSearch({
+      addFootprints: params.addFootprints,
+      fitBounds: params.fitBounds,
+    });
     return {
       ok: !/^Search failed:/i.test(this._lastStatus),
       status: this._lastStatus,
@@ -992,7 +1051,14 @@ export class OperaControl implements IControl {
       this._setExpression(params.expression);
     }
     const before = new Set(this._registeredLayerIds);
-    await this._onDisplay({ waterOnly: params.waterOnly });
+    await this._onDisplay({
+      waterOnly: params.waterOnly,
+      fitBounds: params.fitBounds,
+      clipBounds:
+        params.clipBounds !== undefined
+          ? normalizeAgentBBox(params.clipBounds)
+          : undefined,
+    });
     const displayedLayerIds = this._registeredLayerIds.filter(
       (id) => !before.has(id),
     );
@@ -1027,6 +1093,9 @@ export class OperaControl implements IControl {
         type: "raster",
         tiles: [tileUrl],
         tileSize: tileSizeFromTemplate(tileUrl),
+        ...((params.bounds ?? tileJsonBounds(params.tilejson))
+          ? { bounds: params.bounds ?? tileJsonBounds(params.tilejson) }
+          : {}),
         ...(params.tilejson.minzoom != null
           ? { minzoom: params.tilejson.minzoom }
           : {}),
@@ -1041,7 +1110,7 @@ export class OperaControl implements IControl {
       opacity: params.opacity ?? 1,
       metadata: params.metadata,
     });
-    const bounds = tileJsonBounds(params.tilejson);
+    const bounds = params.bounds ?? tileJsonBounds(params.tilejson);
     if (params.fitBounds !== false && bounds) this._options.fitBounds?.(bounds);
     const status = `Registered titiler-cmr layer ${layerId}.`;
     this._setStatus(status);
@@ -1538,6 +1607,8 @@ export class OperaControl implements IControl {
       start: params.start,
       end: params.end,
       count: maxGranules,
+      addFootprints: false,
+      fitBounds: false,
     });
     const granules = this._granules.slice(0, maxGranules);
     if (!search.ok || granules.length === 0) {
@@ -1578,6 +1649,7 @@ export class OperaControl implements IControl {
           id: `opera-dswx-water-${slug(g.id)}`,
           tilejson: tj,
           fitBounds: false,
+          bounds: bbox,
           metadata: { sourceKind: "opera-titiler-cmr", granuleId: g.id },
         });
         if (reg.layerId) dswxLayerIds.push(reg.layerId);
@@ -2141,10 +2213,6 @@ export class OperaControl implements IControl {
     params: OperaAgentDisasterEventParams,
   ): Promise<OperaAgentDisasterEventResult> {
     const hazard = params.hazard.trim().toLowerCase();
-    const bbox =
-      (params.bbox !== undefined
-        ? normalizeAgentBBox(params.bbox)
-        : undefined) ?? this._currentBBox();
     const warnings: string[] = [];
     if (!hazard) {
       return {
@@ -2154,11 +2222,47 @@ export class OperaControl implements IControl {
         warnings,
       };
     }
+
+    let bbox: BBox | undefined;
+    const drawnAoi = this._state.agentAoiBBox
+      ? normalizeAgentBBox(this._state.agentAoiBBox)
+      : undefined;
+    if (drawnAoi) {
+      bbox = drawnAoi;
+    } else if (params.bbox !== undefined) {
+      bbox = normalizeAgentBBox(params.bbox);
+      if (!bbox) {
+        return {
+          ok: false,
+          status: "Invalid disaster bbox. Use [west,south,east,north].",
+          hazard,
+          warnings,
+        };
+      }
+    } else if (params.place?.trim()) {
+      this._setStatus(`Locating ${params.place.trim()}…`);
+      try {
+        const geocoded = await (
+          this._options.geocodePlace ?? geocodePlaceBounds
+        )(params.place.trim());
+        bbox = normalizeAgentBBox(geocoded.bbox);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        warnings.push(`Place lookup failed: ${detail}`);
+        const mapBounds = this._options.getMapBounds?.();
+        const current = mapBounds ? normalizeAgentBBox(mapBounds) : undefined;
+        if (current && isLocalDisasterBBox(current)) bbox = current;
+      }
+    } else {
+      const mapBounds = this._options.getMapBounds?.();
+      bbox = mapBounds ? normalizeAgentBBox(mapBounds) : undefined;
+    }
     if (!bbox) {
       return {
         ok: false,
-        status:
-          "Navigate to the event location or provide a valid bbox before mapping the disaster.",
+        status: params.place?.trim()
+          ? `Could not resolve a bounded analysis area for "${params.place.trim()}".`
+          : "Navigate to the event location or provide a valid bbox before mapping the disaster.",
         hazard,
         warnings,
       };
@@ -2269,6 +2373,8 @@ export class OperaControl implements IControl {
       start: preEvent.start,
       end: preEvent.end,
       count: 6,
+      addFootprints: false,
+      fitBounds: false,
     });
     let preOpera: DisasterPeriodResult;
     if (preSearch.ok && preSearch.granules.length > 0) {
@@ -2276,6 +2382,8 @@ export class OperaControl implements IControl {
         maxGranules: 6,
         band: "B01_WTR",
         waterOnly: true,
+        fitBounds: false,
+        clipBounds: bbox,
       });
       preOpera = {
         ok: displayed.ok,
@@ -2391,6 +2499,7 @@ export class OperaControl implements IControl {
         tilejson: scene.tilejson,
         opacity: Math.max(0, Math.min(1, params.opacity ?? 0.78)),
         fitBounds: false,
+        bounds: bbox,
         metadata: {
           sourceKind: "sentinel-2-event-imagery",
           provider: scene.provider,
@@ -2830,7 +2939,9 @@ export class OperaControl implements IControl {
 
   // --- Actions -----------------------------------------------------------
 
-  private async _onSearch(): Promise<void> {
+  private async _onSearch(
+    opts: { addFootprints?: boolean; fitBounds?: boolean } = {},
+  ): Promise<void> {
     this._readForm();
     const product = getProduct(this._state.product);
     if (!product) {
@@ -2850,13 +2961,18 @@ export class OperaControl implements IControl {
       this._granules = result.granules;
       this._renderResults();
 
-      if (result.featureCollection.features.length > 0) {
+      if (
+        opts.addFootprints !== false &&
+        result.featureCollection.features.length > 0
+      ) {
         this._options.addGeoJsonLayer?.(
           `OPERA ${product.shortTitle} Footprints (${result.granules.length})`,
           result.featureCollection,
         );
       }
-      if (result.bounds) this._options.fitBounds?.(result.bounds);
+      if (opts.fitBounds !== false && result.bounds) {
+        this._options.fitBounds?.(result.bounds);
+      }
 
       this._setStatus(
         result.granules.length > 0
@@ -2870,7 +2986,13 @@ export class OperaControl implements IControl {
     }
   }
 
-  private async _onDisplay(opts: { waterOnly?: boolean } = {}): Promise<void> {
+  private async _onDisplay(
+    opts: {
+      waterOnly?: boolean;
+      fitBounds?: boolean;
+      clipBounds?: BBox;
+    } = {},
+  ): Promise<void> {
     const product = getProduct(this._state.product);
     const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
     if (!product || selected.length === 0) {
@@ -2929,6 +3051,7 @@ export class OperaControl implements IControl {
                 type: "raster",
                 tiles: [tileUrl],
                 tileSize: tileSizeFromTemplate(tileUrl),
+                ...(opts.clipBounds ? { bounds: opts.clipBounds } : {}),
                 ...(tilejson.minzoom != null
                   ? { minzoom: tilejson.minzoom }
                   : {}),
@@ -2951,7 +3074,10 @@ export class OperaControl implements IControl {
       );
 
       const bounds = this._combinedBounds(selected);
-      if (bounds) this._options.fitBounds?.(bounds);
+      if (opts.fitBounds !== false) {
+        const fit = opts.clipBounds ?? bounds;
+        if (fit) this._options.fitBounds?.(fit);
+      }
       this._setStatus(
         ok === selected.length
           ? `Displayed ${ok} granule(s).`
@@ -3210,6 +3336,61 @@ export class OperaControl implements IControl {
     if (map.getSource(HL_SRC)) map.removeSource(HL_SRC);
   }
 
+  private _agentAoiData(bbox: BBox): Parameters<GeoJSONSource["setData"]>[0] {
+    return {
+      type: "FeatureCollection",
+      features: [bboxFeature(bbox)],
+    } as Parameters<GeoJSONSource["setData"]>[0];
+  }
+
+  private _restoreAgentAoiLayer(): void {
+    const bbox = this._state.agentAoiBBox;
+    if (bbox) this._renderAgentAoiLayer(bbox);
+  }
+
+  private _renderAgentAoiLayer(bbox: BBox): void {
+    const map = this._map;
+    if (!map) return;
+    const data = this._agentAoiData(bbox);
+    const source = map.getSource(AGENT_AOI_SRC) as GeoJSONSource | undefined;
+    if (source) {
+      source.setData(data);
+    } else {
+      map.addSource(AGENT_AOI_SRC, { type: "geojson", data });
+    }
+    if (!map.getLayer(AGENT_AOI_FILL)) {
+      map.addLayer({
+        id: AGENT_AOI_FILL,
+        type: "fill",
+        source: AGENT_AOI_SRC,
+        paint: { "fill-color": "#0891b2", "fill-opacity": 0.08 },
+      });
+    }
+    if (!map.getLayer(AGENT_AOI_LINE)) {
+      map.addLayer({
+        id: AGENT_AOI_LINE,
+        type: "line",
+        source: AGENT_AOI_SRC,
+        paint: {
+          "line-color": "#0891b2",
+          "line-width": 2.5,
+          "line-dasharray": [2, 1.5],
+        },
+      });
+    }
+    map.moveLayer(AGENT_AOI_FILL);
+    map.moveLayer(AGENT_AOI_LINE);
+  }
+
+  private _removeAgentAoiLayers(): void {
+    const map = this._map;
+    if (!map) return;
+    for (const id of [AGENT_AOI_LINE, AGENT_AOI_FILL]) {
+      if (map.getLayer(id)) map.removeLayer(id);
+    }
+    if (map.getSource(AGENT_AOI_SRC)) map.removeSource(AGENT_AOI_SRC);
+  }
+
   // --- Map interaction: click-to-select + hover cursor -------------------
 
   private _onMapClick = (e: MapMouseEvent): void => {
@@ -3323,8 +3504,14 @@ export class OperaControl implements IControl {
       const s = Math.min(start.lat, end.lat);
       const ee = Math.max(start.lng, end.lng);
       const n = Math.max(start.lat, end.lat);
-      this._state.bbox = [w, s, ee, n].map((v) => v.toFixed(4)).join(", ");
-      this._syncForm();
+      const bbox = normalizeAgentBBox([w, s, ee, n]);
+      if (bbox) {
+        this._state.bbox = bbox.map((v) => v.toFixed(4)).join(", ");
+        this._state.agentAoiBBox = bbox;
+        this._syncForm();
+        this._renderAgentAoiLayer(bbox);
+        this._options.onAgentAoiChange?.(bbox);
+      }
     }
     this._endDraw();
   };
@@ -4691,9 +4878,17 @@ function normalizeAgentBBox(value: BBox | string): BBox | undefined {
     ? value
     : value.split(",").map((part) => Number(part.trim()));
   if (parts.length !== 4 || !parts.every(Number.isFinite)) return undefined;
-  const [w, s, e, n] = parts.map(Number);
+  const [rawW, rawS, rawE, rawN] = parts.map(Number);
+  const w = Math.max(-180, Math.min(180, rawW));
+  const s = Math.max(-85, Math.min(85, rawS));
+  const e = Math.max(-180, Math.min(180, rawE));
+  const n = Math.max(-85, Math.min(85, rawN));
   if (w >= e || s >= n) return undefined;
   return [w, s, e, n];
+}
+
+function isLocalDisasterBBox(bbox: BBox): boolean {
+  return bbox[2] - bbox[0] <= 20 && bbox[3] - bbox[1] <= 20;
 }
 
 function resolveProductForAgent(value: string): ReturnType<typeof getProduct> {

@@ -14,21 +14,43 @@
  * coordinates from Web Mercator pixels back to lon/lat, and simplify.
  */
 
-import type {
-  GeoFeature,
-  GeoFeatureCollection,
-  Position,
-} from "./geometry";
+import type { GeoFeature, GeoFeatureCollection, Position } from "./geometry";
 import type { BBox } from "./types";
 
 const TILE = 256;
+const MAX_MERCATOR_LAT = 85.0511287798;
+const MAX_TILES_ACROSS = 32;
+
+function mercatorBBox(bbox: BBox): BBox {
+  if (bbox.length !== 4 || !bbox.every(Number.isFinite)) {
+    throw new Error("Flood extent requires a finite bbox.");
+  }
+  const [rawW, rawS, rawE, rawN] = bbox;
+  const w = Math.max(-180, Math.min(180, rawW));
+  const s = Math.max(-MAX_MERCATOR_LAT, Math.min(MAX_MERCATOR_LAT, rawS));
+  const e = Math.max(-180, Math.min(180, rawE));
+  const n = Math.max(-MAX_MERCATOR_LAT, Math.min(MAX_MERCATOR_LAT, rawN));
+  if (w >= e || s >= n) {
+    throw new Error("Flood extent requires an ordered, non-empty bbox.");
+  }
+  return [w, s, e, n];
+}
+
+function tileBudget(value: number): number {
+  if (!Number.isFinite(value)) return 4;
+  return Math.max(1, Math.min(MAX_TILES_ACROSS, Math.floor(value)));
+}
 
 // ---------------------------------------------------------------------------
 // Web Mercator helpers (XYZ / WebMercatorQuad).
 // ---------------------------------------------------------------------------
 
 /** Global pixel coordinate (at `zoom`) for a lon/lat. */
-function lonLatToPixel(lon: number, lat: number, zoom: number): [number, number] {
+function lonLatToPixel(
+  lon: number,
+  lat: number,
+  zoom: number,
+): [number, number] {
   const scale = TILE * 2 ** zoom;
   const x = ((lon + 180) / 360) * scale;
   const sinLat = Math.sin((lat * Math.PI) / 180);
@@ -51,14 +73,15 @@ function pixelToLonLat(px: number, py: number, zoom: number): Position {
  * `maxTilesAcross` tiles on the longer side, so the stitched image is bounded.
  */
 export function chooseZoom(bbox: BBox, maxTilesAcross = 6): number {
-  const [w, s, e, n] = bbox;
+  const [w, s, e, n] = mercatorBBox(bbox);
+  const budget = tileBudget(maxTilesAcross);
   for (let z = 16; z >= 0; z--) {
     const [x0] = lonLatToPixel(w, n, z);
     const [x1] = lonLatToPixel(e, s, z);
     const [, y0] = lonLatToPixel(w, n, z);
     const [, y1] = lonLatToPixel(e, s, z);
     const across = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) / TILE;
-    if (across <= maxTilesAcross) return z;
+    if (Number.isFinite(across) && across <= budget) return z;
   }
   return 0;
 }
@@ -129,9 +152,9 @@ export function traceMaskRings(
       do {
         used.add(edge);
         ring.push([edge.ex, edge.ey]);
-        const candidates = (edgesByStart.get(key(edge.ex, edge.ey)) ?? []).filter(
-          (c) => !used.has(c),
-        );
+        const candidates = (
+          edgesByStart.get(key(edge.ex, edge.ey)) ?? []
+        ).filter((c) => !used.has(c));
         if (candidates.length === 0) break;
         if (candidates.length === 1) {
           edge = candidates[0];
@@ -155,7 +178,11 @@ export function traceMaskRings(
 /** Remove interior points that are collinear with their neighbours. */
 function dropCollinear(ring: NodeRing): NodeRing {
   const pts = ring.slice();
-  if (pts.length > 1 && pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1]) {
+  if (
+    pts.length > 1 &&
+    pts[0][0] === pts[pts.length - 1][0] &&
+    pts[0][1] === pts[pts.length - 1][1]
+  ) {
     pts.pop();
   }
   const out: NodeRing = [];
@@ -277,8 +304,7 @@ function ensureWinding(ring: Position[], ccw: boolean): Position[] {
 
 /** Approximate ring area in km² via an equirectangular projection at mean lat. */
 function ringAreaKm2(ring: Position[]): number {
-  const meanLat =
-    ring.reduce((s, p) => s + p[1], 0) / Math.max(ring.length, 1);
+  const meanLat = ring.reduce((s, p) => s + p[1], 0) / Math.max(ring.length, 1);
   const mPerDegLat = 111_320;
   const mPerDegLon = 111_320 * Math.cos((meanLat * Math.PI) / 180);
   let a = 0;
@@ -327,12 +353,15 @@ async function runPool<T>(
   worker: (item: T) => Promise<void>,
 ): Promise<void> {
   let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      await worker(items[i]);
-    }
-  });
+  const runners = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (next < items.length) {
+        const i = next++;
+        await worker(items[i]);
+      }
+    },
+  );
   await Promise.all(runners);
 }
 
@@ -347,18 +376,37 @@ export async function deriveFloodExtent(
   tileTemplates: string[],
   opts: DeriveFloodExtentOptions = {},
 ): Promise<GeoFeatureCollection> {
-  const [w, s, e, n] = bbox;
-  const zoom = chooseZoom(bbox, opts.maxTilesAcross ?? 4);
+  const safeBBox = mercatorBBox(bbox);
+  const [w, s, e, n] = safeBBox;
+  const maxTilesAcross = tileBudget(opts.maxTilesAcross ?? 4);
+  const zoom = chooseZoom(safeBBox, maxTilesAcross);
   const [gx0, gy0] = lonLatToPixel(w, n, zoom); // top-left global pixel
   const [gx1, gy1] = lonLatToPixel(e, s, zoom); // bottom-right global pixel
-  const tx0 = Math.floor(gx0 / TILE);
-  const ty0 = Math.floor(gy0 / TILE);
-  const tx1 = Math.floor(gx1 / TILE);
-  const ty1 = Math.floor(gy1 / TILE);
+  if (![gx0, gy0, gx1, gy1].every(Number.isFinite)) {
+    throw new Error("Flood extent bbox could not be projected.");
+  }
+  const maxTileIndex = 2 ** zoom - 1;
+  const tileIndex = (value: number): number =>
+    Math.max(0, Math.min(maxTileIndex, value));
+  const tx0 = tileIndex(Math.floor(gx0 / TILE));
+  const ty0 = tileIndex(Math.floor(gy0 / TILE));
+  const tx1 = tileIndex(Math.ceil(gx1 / TILE) - 1);
+  const ty1 = tileIndex(Math.ceil(gy1 / TILE) - 1);
   const cols = tx1 - tx0 + 1;
   const rows = ty1 - ty0 + 1;
+  if (
+    cols < 1 ||
+    rows < 1 ||
+    cols > maxTilesAcross + 2 ||
+    rows > maxTilesAcross + 2
+  ) {
+    throw new Error("Flood extent bbox exceeds the raster tile budget.");
+  }
   const stitchW = cols * TILE;
   const stitchH = rows * TILE;
+  if (!Number.isSafeInteger(stitchW * stitchH)) {
+    throw new Error("Flood extent raster dimensions are invalid.");
+  }
   const originPx = tx0 * TILE;
   const originPy = ty0 * TILE;
 
@@ -411,7 +459,9 @@ async function defaultTileLoader(url: string): Promise<RgbaImage | null> {
   if (!resp.ok) return null;
   const bmp = await g.createImageBitmap(await resp.blob());
   const canvas = new g.OffscreenCanvas(bmp.width, bmp.height);
-  const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D | null;
+  const ctx = canvas.getContext(
+    "2d",
+  ) as OffscreenCanvasRenderingContext2D | null;
   if (!ctx) return null;
   ctx.drawImage(bmp, 0, 0);
   const { data, width, height } = ctx.getImageData(0, 0, bmp.width, bmp.height);
