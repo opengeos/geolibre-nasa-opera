@@ -45,6 +45,12 @@ describe("OPERA agent tools", () => {
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("sentinel2_event_imagery");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("overture_in_flood");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("population_in_flood");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "Navigating the map or adding a basemap is preparation, not completion",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "use 2024-10-27 through 2024-11-05",
+    );
   });
 
   it("gates benchmark tools when no control is active", () => {

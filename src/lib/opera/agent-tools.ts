@@ -15,6 +15,14 @@ import {
 
 export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available for searching and visualizing OPERA satellite products.
 
+Mandatory disaster-request routing:
+- A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster MUST use the OPERA disaster tools. Navigating the map or adding a basemap is preparation, not completion. Do not give a final answer until at least one OPERA disaster tool has run, or until a tool returns a concrete error that you report.
+- Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. Open-access Sentinel-2 event imagery must come from sentinel2_event_imagery, not a generic satellite basemap.
+- After navigating to a named place, continue with the current map extent as the AOI. For every disaster type, call map_disaster_context so Overture buildings, transportation, and WorldPop population are added even when quantified exposure is not yet possible.
+- If dates are omitted but the hazard and place clearly identify a well-known historical event, use the event's established date window and state that assumption. Do not stop to request confirmation merely because dates were omitted. For example, "Flood in Valencia Region, Spain" refers to the late-October 2024 DANA flood; use 2024-10-27 through 2024-11-05 unless the user specifies another event.
+- If the event remains genuinely ambiguous, call map_disaster_context first, explain that those layers are contextual, then ask for the missing date or event identifier. Never claim that a disaster was mapped after only add_basemap or zoom_to_bounds.
+- For a flood with an event window, run derive_flood_benchmark, then overture_in_flood and population_in_flood after the benchmark succeeds, and sentinel2_event_imagery for optical context. Also call map_disaster_context before or during this workflow so baseline exposure layers are present.
+
 Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surface water, SAR backscatter, or disturbance data.
 - Prefer search_and_display_opera when the user asks to find/show/display OPERA data in one request.
 - Use detect_opera_change_between_dates when the user asks to compare two dates, detect change, or create before/after OPERA layers.
