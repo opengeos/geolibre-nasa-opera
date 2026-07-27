@@ -49,7 +49,12 @@ import {
   type StatisticsResult,
   type TileJson,
 } from "../opera/titiler";
-import type { BBox, GranuleBand, OperaGranule } from "../opera/types";
+import type {
+  BBox,
+  GranuleBand,
+  OperaGranule,
+  OperaProduct,
+} from "../opera/types";
 import {
   lockBenchmark,
   summarizeBenchmark,
@@ -337,7 +342,7 @@ export interface OperaAgentDeriveFloodParams {
   eventName?: string;
   /** Human place label for the benchmark/one-pager subtitle. */
   place?: string;
-  /** Max DSWx granules to mosaic (1-12); default 6. */
+  /** Max granules to mosaic per DSWx product (1-12); default 6. */
   maxGranules?: number;
 }
 
@@ -346,6 +351,8 @@ export interface OperaAgentDeriveFloodResult extends OperaAgentBenchmarkResult {
   dswxLayerIds: string[];
   /** How many DSWx granules contributed to the observed-water mosaic. */
   granulesUsed: number;
+  /** Successfully loaded granules by OPERA DSWx product. */
+  productsUsed?: Record<string, number>;
 }
 
 export interface OperaAgentBuildingsParams {
@@ -410,7 +417,7 @@ export interface OperaAgentOvertureResult {
 }
 
 export interface OperaAgentPopulationParams {
-  /** WorldPop data year. Public global coverage is currently 2000-2020. */
+  /** WorldPop data year. Public Global 2 coverage used here is 2015-2020. */
   year?: number;
   /** Draw the styled WorldPop 100 m population image layer. */
   addLayer?: boolean;
@@ -1567,16 +1574,17 @@ export class OperaControl implements IControl {
   /**
    * Auto-derive a flood benchmark from OPERA DSWx for an AOI + date range, so
    * the flood one-pager can be produced from just space + time (no human-QAed
-   * GeoJSON). Searches DSWx-HLS, renders the observed open/partial water as
-   * water-only tiles on the map (for the one-pager snapshot), vectorizes that
-   * water into a polygon, and locks it as the working benchmark. The result is
-   * explicitly OPERA-observed, not a human-QAed benchmark.
+   * GeoJSON). Searches both DSWx-HLS and cloud-penetrating DSWx-S1, renders the
+   * observed open/partial water as water-only tiles on the map (for the
+   * one-pager snapshot), unions and vectorizes that water into a polygon, and
+   * locks it as the working benchmark. The result is explicitly
+   * OPERA-observed, not a human-QAed benchmark.
    */
   async deriveFloodBenchmarkForAgent(
     params: OperaAgentDeriveFloodParams,
   ): Promise<OperaAgentDeriveFloodResult> {
     this.expand();
-    const shortName = "OPERA_L3_DSWX-HLS_V1";
+    const dswxProductNames = ["OPERA_L3_DSWX-HLS_V1", "OPERA_L3_DSWX-S1_V1"];
     const bbox =
       (params.bbox !== undefined
         ? normalizeAgentBBox(params.bbox)
@@ -1590,73 +1598,96 @@ export class OperaControl implements IControl {
         granulesUsed: 0,
       };
     }
-    const product = getProduct(shortName);
-    if (!product) {
-      return {
-        ok: false,
-        status: `Unknown product ${shortName}.`,
-        dswxLayerIds: [],
-        granulesUsed: 0,
-      };
-    }
     const maxGranules = Math.min(Math.max(params.maxGranules ?? 6, 1), 12);
 
-    // 1) Search DSWx-HLS over the AOI + dates (also populates the panel/table).
-    const search = await this.searchForAgent({
-      product: shortName,
-      bbox,
-      start: params.start,
-      end: params.end,
-      count: maxGranules,
-      addFootprints: false,
-      fitBounds: false,
-    });
-    const granules = this._granules.slice(0, maxGranules);
-    if (!search.ok || granules.length === 0) {
+    // 1) Search both optical HLS and cloud-penetrating Sentinel-1 DSWx. The
+    // water masks are unioned below so S1 can fill gaps left by cloud-obscured
+    // HLS observations.
+    const observations: Array<{
+      product: OperaProduct;
+      granules: OperaGranule[];
+    }> = [];
+    for (const shortName of dswxProductNames) {
+      const product = getProduct(shortName);
+      if (!product) continue;
+      const search = await this.searchForAgent({
+        product: shortName,
+        bbox,
+        start: params.start,
+        end: params.end,
+        count: maxGranules,
+        addFootprints: false,
+        fitBounds: false,
+      });
+      const granules = this._granules.slice(0, maxGranules);
+      if (search.ok && granules.length > 0) {
+        observations.push({ product, granules });
+      }
+    }
+    if (observations.length === 0) {
       return {
         ok: false,
-        status: `No OPERA DSWx-HLS granules found for the AOI over ${params.start}..${params.end}.`,
+        status: `No OPERA DSWx-HLS or DSWx-S1 granules found for the AOI over ${params.start}..${params.end}.`,
         dswxLayerIds: [],
         granulesUsed: 0,
       };
     }
 
-    // 2) Build water-only DSWx tiles, register them on the map (for the
-    //    snapshot), and collect the tile templates to vectorize.
-    const band = product.render.bands?.[0] ?? "B01_WTR";
-    const colormap = colormapForBand(shortName, band, { waterOnly: true });
-    const conceptId =
-      granules[0].conceptId ?? (await resolveConceptId(shortName));
+    // 2) Build water-only tiles for every available product, register them for
+    //    the snapshot, and collect the templates for one combined mask.
     const endpoint = this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT;
     const tileTemplates: string[] = [];
     const dswxLayerIds: string[] = [];
+    const productsUsed: Record<string, number> = {};
     this._setStatus("Loading OPERA DSWx observed-water tiles…");
-    for (const g of granules) {
+    for (const observation of observations) {
+      const { product, granules } = observation;
+      const shortName = product.shortName;
+      const band = product.render.bands?.[0] ?? "B01_WTR";
+      const colormap = colormapForBand(shortName, band, { waterOnly: true });
+      let conceptId: string;
       try {
-        const url = buildTileJsonUrl({
-          endpoint,
-          conceptId,
-          backend: product.render.backend,
-          granuleUr: g.id,
-          bands: [band],
-          bandsRegex: product.render.bandsRegex,
-          colormap,
-        });
-        const tj = await fetchTileJson(url);
-        if (!tj.tiles?.[0]) continue;
-        tileTemplates.push(tj.tiles[0]);
-        const reg = this.registerTileJsonForAgent({
-          name: `OPERA DSWx water — ${g.id}`,
-          id: `opera-dswx-water-${slug(g.id)}`,
-          tilejson: tj,
-          fitBounds: false,
-          bounds: bbox,
-          metadata: { sourceKind: "opera-titiler-cmr", granuleId: g.id },
-        });
-        if (reg.layerId) dswxLayerIds.push(reg.layerId);
+        conceptId =
+          granules[0].conceptId ?? (await resolveConceptId(shortName));
       } catch {
-        // Skip a granule whose tilejson fails; report the partial count below.
+        continue;
       }
+      let loaded = 0;
+      for (const granule of granules) {
+        try {
+          const url = buildTileJsonUrl({
+            endpoint,
+            conceptId,
+            backend: product.render.backend,
+            granuleUr: granule.id,
+            bands: [band],
+            bandsRegex: product.render.bandsRegex,
+            colormap,
+          });
+          const tilejson = await fetchTileJson(url);
+          if (!tilejson.tiles?.[0]) continue;
+          tileTemplates.push(tilejson.tiles[0]);
+          loaded += 1;
+          const registration = this.registerTileJsonForAgent({
+            name: `OPERA ${product.shortTitle} water - ${granule.id}`,
+            id: `opera-dswx-water-${slug(granule.id)}`,
+            tilejson,
+            fitBounds: false,
+            bounds: bbox,
+            metadata: {
+              sourceKind: "opera-titiler-cmr",
+              product: shortName,
+              granuleId: granule.id,
+            },
+          });
+          if (registration.layerId) {
+            dswxLayerIds.push(registration.layerId);
+          }
+        } catch {
+          // Skip a granule whose tilejson fails; use the remaining observations.
+        }
+      }
+      if (loaded > 0) productsUsed[product.shortTitle] = loaded;
     }
     if (tileTemplates.length === 0) {
       return {
@@ -1664,6 +1695,7 @@ export class OperaControl implements IControl {
         status: "Could not load DSWx tiles from titiler-cmr.",
         dswxLayerIds,
         granulesUsed: 0,
+        productsUsed,
       };
     }
 
@@ -1671,7 +1703,7 @@ export class OperaControl implements IControl {
     this._setStatus("Deriving the OPERA-observed flood extent…");
     let water: GeoFeatureCollection;
     try {
-      water = await deriveFloodExtent(bbox, tileTemplates);
+      water = await deriveFloodExtent(bbox, tileTemplates, { scale: 4 });
     } catch (err) {
       const status = `Flood-extent derivation failed: ${err instanceof Error ? err.message : String(err)}`;
       this._setStatus(status);
@@ -1680,6 +1712,7 @@ export class OperaControl implements IControl {
         status,
         dswxLayerIds,
         granulesUsed: tileTemplates.length,
+        productsUsed,
       };
     }
     if (water.features.length === 0) {
@@ -1691,6 +1724,7 @@ export class OperaControl implements IControl {
         status,
         dswxLayerIds,
         granulesUsed: tileTemplates.length,
+        productsUsed,
       };
     }
 
@@ -1706,9 +1740,14 @@ export class OperaControl implements IControl {
       water,
       { name: eventName, date: dateLabel, location: params.place },
       {
-        label: "OPERA DSWx observed water",
+        label: "OPERA DSWx-HLS + DSWx-S1 observed water",
         fillColor: "#2b7fff",
-        classes: [{ label: "DSWx open + partial water", color: "#2b7fff" }],
+        classes: [
+          {
+            label: "DSWx-HLS/S1 open + partial water",
+            color: "#2b7fff",
+          },
+        ],
       },
     );
     if (!lock.ok) {
@@ -1717,11 +1756,16 @@ export class OperaControl implements IControl {
         status: lock.status,
         dswxLayerIds,
         granulesUsed: tileTemplates.length,
+        productsUsed,
       };
     }
-    const status = `Derived an OPERA flood extent from ${tileTemplates.length} DSWx granule(s): ${
-      lock.benchmark?.areaKm2.toFixed(2) ?? "?"
-    } km². This is observed OPERA water, not a human-QAed benchmark.`;
+    const sourceSummary = Object.entries(productsUsed)
+      .map(([name, count]) => `${count} ${name}`)
+      .join(" + ");
+    const status =
+      `Derived an OPERA flood extent from ${tileTemplates.length} DSWx granule(s) ` +
+      `(${sourceSummary}): ${lock.benchmark?.areaKm2.toFixed(2) ?? "?"} km². ` +
+      "This is observed OPERA water, not a human-QAed benchmark.";
     this._setStatus(status);
     return {
       ok: true,
@@ -1729,6 +1773,7 @@ export class OperaControl implements IControl {
       benchmark: lock.benchmark,
       dswxLayerIds,
       granulesUsed: tileTemplates.length,
+      productsUsed,
     };
   }
 
@@ -1903,6 +1948,14 @@ export class OperaControl implements IControl {
     const buildingImpact = buildingsInFlood(buildings, benchmark.water, {
       computeArea: params.computeBuildingArea,
     });
+    const extrudedBuildings = withBuildingExtrusionHeights(buildings);
+    const extrudedFloodedBuildings = withBuildingExtrusionHeights(
+      {
+        type: "FeatureCollection",
+        features: buildingImpact.floodedFeatures,
+      },
+      1,
+    );
     const transportationImpact = transportationInFlood(
       transportation,
       benchmark.water,
@@ -1918,13 +1971,13 @@ export class OperaControl implements IControl {
         buildingsContextLayerId = this._addStyledGeoJsonImpactLayer({
           id: "opera-context-overture-buildings",
           name: `All Overture buildings - ${benchmark.event.name}`,
-          data: buildings,
-          geometry: "fill",
+          data: extrudedBuildings,
+          geometry: "extrusion",
           color: "#64748b",
-          opacity: 0.18,
-          strokeColor: "#475569",
-          strokeWidth: 0.6,
+          opacity: 0.42,
+          strokeWidth: 0,
           sourceKind: "opera-overture-context",
+          extrusionHeightProperty: "_opera_height_m",
         });
       }
       const transportationStyles = [
@@ -1971,15 +2024,12 @@ export class OperaControl implements IControl {
         buildingsLayerId = this._addStyledGeoJsonImpactLayer({
           id: "opera-impact-overture-buildings",
           name: `Flooded Overture buildings - ${benchmark.event.name}`,
-          data: {
-            type: "FeatureCollection",
-            features: buildingImpact.floodedFeatures,
-          },
-          geometry: "fill",
+          data: extrudedFloodedBuildings,
+          geometry: "extrusion",
           color: "#dc2626",
-          opacity: 0.68,
-          strokeColor: "#7f1d1d",
-          strokeWidth: 1,
+          opacity: 0.92,
+          strokeWidth: 0,
+          extrusionHeightProperty: "_opera_height_m",
         });
       }
       if (transportationImpact.impactedFeatures.length > 0) {
@@ -2008,6 +2058,8 @@ export class OperaControl implements IControl {
       `Overture exposure - ${benchmark.event.name}`,
       layerIds,
     );
+    this._moveDisasterRastersBelowOverture();
+    this._enableDisaster3DView();
 
     const status =
       `Overture ${buildingQuery.release}: ${buildingImpact.floodedCount.toLocaleString()} flooded ` +
@@ -2367,18 +2419,23 @@ export class OperaControl implements IControl {
       };
     }
 
-    this._setStatus("Loading pre-event OPERA DSWx baseline…");
-    const preSearch = await this.searchForAgent({
-      product: "OPERA_L3_DSWX-HLS_V1",
-      bbox,
-      start: preEvent.start,
-      end: preEvent.end,
-      count: 6,
-      addFootprints: false,
-      fitBounds: false,
-    });
-    let preOpera: DisasterPeriodResult;
-    if (preSearch.ok && preSearch.granules.length > 0) {
+    this._setStatus("Loading pre-event OPERA DSWx-HLS and DSWx-S1 baseline…");
+    const preEventLayerIds: string[] = [];
+    const preEventStatuses: string[] = [];
+    for (const product of ["OPERA_L3_DSWX-HLS_V1", "OPERA_L3_DSWX-S1_V1"]) {
+      const search = await this.searchForAgent({
+        product,
+        bbox,
+        start: preEvent.start,
+        end: preEvent.end,
+        count: 6,
+        addFootprints: false,
+        fitBounds: false,
+      });
+      if (!search.ok || search.granules.length === 0) {
+        preEventStatuses.push(search.status);
+        continue;
+      }
       const displayed = await this.displayForAgent({
         maxGranules: 6,
         band: "B01_WTR",
@@ -2386,21 +2443,20 @@ export class OperaControl implements IControl {
         fitBounds: false,
         clipBounds: bbox,
       });
-      preOpera = {
-        ok: displayed.ok,
-        status: displayed.status,
-        layerIds: displayed.displayedLayerIds,
-      };
-      if (!displayed.ok) warnings.push(displayed.status);
-      this._replaceLayerGroup(
-        "opera-pre-event",
-        `Pre-event OPERA - ${eventName}`,
-        displayed.displayedLayerIds,
-      );
-    } else {
-      preOpera = { ok: false, status: preSearch.status, layerIds: [] };
-      warnings.push(preSearch.status);
+      preEventStatuses.push(displayed.status);
+      preEventLayerIds.push(...displayed.displayedLayerIds);
     }
+    const preOpera: DisasterPeriodResult = {
+      ok: preEventLayerIds.length > 0,
+      status: preEventStatuses.join(" "),
+      layerIds: preEventLayerIds,
+    };
+    if (!preOpera.ok) warnings.push(preOpera.status);
+    this._replaceLayerGroup(
+      "opera-pre-event",
+      `Pre-event OPERA DSWx-HLS + DSWx-S1 - ${eventName}`,
+      preEventLayerIds,
+    );
 
     const derived = await this.deriveFloodBenchmarkForAgent({
       bbox,
@@ -2417,7 +2473,7 @@ export class OperaControl implements IControl {
     };
     this._replaceLayerGroup(
       "opera-post-event",
-      `Post-event OPERA - ${eventName}`,
+      `Post-event OPERA DSWx-HLS + DSWx-S1 - ${eventName}`,
       derived.dswxLayerIds,
     );
     if (!derived.ok) warnings.push(derived.status);
@@ -2427,6 +2483,10 @@ export class OperaControl implements IControl {
     let population: OperaAgentPopulationResult | undefined;
     let onePager: OperaAgentDisasterEventResult["onePager"];
     if (derived.ok) {
+      // Register WorldPop before Overture so all raster context remains beneath
+      // the vector buildings and transportation layers in the host layer order.
+      population = await this.populationInFloodForAgent({ addLayer: true });
+      if (!population.ok) warnings.push(population.status);
       overture = await this.overtureInFloodForAgent({
         bbox,
         addLayers: true,
@@ -2434,11 +2494,13 @@ export class OperaControl implements IControl {
         maxFeatures: 250_000,
       });
       if (!overture.ok) warnings.push(overture.status);
-      population = await this.populationInFloodForAgent({ addLayer: true });
-      if (!population.ok) warnings.push(population.status);
 
       this._setStatus("Preparing the flood assessment one-pager…");
       const generatedOnePager = await this.buildOnePagerForAgent({
+        narrative:
+          `${eventName} was assessed for ${event.start} through ${event.end}. ` +
+          "This open-data assessment combines NASA OPERA DSWx-HLS optical surface-water observations with cloud-penetrating DSWx-S1 radar observations, pre- and post-event Sentinel-2 imagery, Overture Maps buildings and transportation, and WorldPop population context. " +
+          "Mapped exposure reflects intersection with OPERA-observed water and is not a field-validated damage estimate.",
         buildings: overture.ok
           ? {
               floodedCount: overture.buildings.floodedCount,
@@ -2541,7 +2603,7 @@ export class OperaControl implements IControl {
         tilejson: scene.tilejson,
         opacity: Math.max(0, Math.min(1, params.opacity ?? 0.78)),
         fitBounds: false,
-        bounds: bbox,
+        bounds: scene.bbox,
         metadata: {
           sourceKind: "sentinel-2-event-imagery",
           provider: scene.provider,
@@ -2790,12 +2852,13 @@ export class OperaControl implements IControl {
     id: string;
     name: string;
     data: GeoFeatureCollection;
-    geometry: "fill" | "line";
+    geometry: "fill" | "line" | "extrusion";
     color: string;
     opacity: number;
     strokeColor?: string;
     strokeWidth: number;
     sourceKind?: string;
+    extrusionHeightProperty?: string;
   }): string | undefined {
     const map = this._map;
     if (!map) {
@@ -2806,8 +2869,18 @@ export class OperaControl implements IControl {
     const nativeLayerIds =
       options.geometry === "fill"
         ? [`${options.id}-fill`, `${options.id}-outline`]
-        : [`${options.id}-line`];
-    this._removeManagedMapLayer(options.id, nativeLayerIds, sourceId);
+        : options.geometry === "extrusion"
+          ? [`${options.id}-extrusion`]
+          : [`${options.id}-line`];
+    const obsoleteLayerIds =
+      options.geometry === "extrusion"
+        ? [`${options.id}-fill`, `${options.id}-outline`]
+        : [`${options.id}-extrusion`];
+    this._removeManagedMapLayer(
+      options.id,
+      [...nativeLayerIds, ...obsoleteLayerIds],
+      sourceId,
+    );
     map.addSource(sourceId, {
       type: "geojson",
       data: options.data as never,
@@ -2830,6 +2903,23 @@ export class OperaControl implements IControl {
           "line-color": options.strokeColor ?? options.color,
           "line-opacity": 1,
           "line-width": options.strokeWidth,
+        },
+      });
+    } else if (options.geometry === "extrusion") {
+      map.addLayer({
+        id: nativeLayerIds[0],
+        type: "fill-extrusion",
+        source: sourceId,
+        paint: {
+          "fill-extrusion-color": options.color,
+          "fill-extrusion-opacity": options.opacity,
+          "fill-extrusion-height": [
+            "to-number",
+            ["get", options.extrusionHeightProperty ?? "_opera_height_m"],
+            8,
+          ],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-vertical-gradient": true,
         },
       });
     } else {
@@ -2857,6 +2947,17 @@ export class OperaControl implements IControl {
         fillOpacity: options.geometry === "fill" ? options.opacity : 0,
         strokeColor: options.strokeColor ?? options.color,
         strokeWidth: options.strokeWidth,
+        ...(options.geometry === "extrusion"
+          ? {
+              extrusionEnabled: true,
+              extrusionColor: options.color,
+              extrusionOpacity: options.opacity,
+              extrusionHeightProperty:
+                options.extrusionHeightProperty ?? "_opera_height_m",
+              extrusionHeightScale: 1,
+              extrusionBase: 0,
+            }
+          : {}),
       },
       metadata: {
         sourceKind: options.sourceKind ?? "opera-disaster-impact",
@@ -2889,11 +2990,7 @@ export class OperaControl implements IControl {
         [west, south],
       ],
     });
-    const beforeId = map.getLayer("opera-impact-overture-buildings-fill")
-      ? "opera-impact-overture-buildings-fill"
-      : map.getLayer("opera-impact-overture-transportation-line")
-        ? "opera-impact-overture-transportation-line"
-        : undefined;
+    const beforeId = this._bottomOvertureLayerId();
     map.addLayer(
       {
         id: layerId,
@@ -2912,6 +3009,7 @@ export class OperaControl implements IControl {
       type: "raster",
       nativeLayerIds: [layerId],
       sourceIds: [sourceId],
+      beforeId,
       opacity: 0.55,
       metadata: {
         sourceKind: "worldpop-population",
@@ -2921,6 +3019,44 @@ export class OperaControl implements IControl {
       },
     });
     return id;
+  }
+
+  private _bottomOvertureLayerId(): string | undefined {
+    const map = this._map;
+    if (!map) return undefined;
+    return [
+      "opera-context-overture-buildings-extrusion",
+      "opera-context-overture-road-line",
+      "opera-context-overture-rail-line",
+      "opera-context-overture-water-line",
+      "opera-impact-overture-buildings-extrusion",
+      "opera-impact-overture-transportation-line",
+    ].find((id) => Boolean(map.getLayer(id)));
+  }
+
+  private _moveDisasterRastersBelowOverture(): void {
+    const map = this._map;
+    const beforeId = this._bottomOvertureLayerId();
+    if (!map || !beforeId) return;
+    const rasterLayerIds = (map.getStyle().layers ?? [])
+      .filter(
+        (layer) =>
+          layer.type === "raster" &&
+          (layer.id.startsWith("opera-cog-") ||
+            layer.id.startsWith("opera-dswx-water-") ||
+            layer.id.startsWith("sentinel-2-") ||
+            layer.id === "opera-impact-worldpop-raster"),
+      )
+      .map((layer) => layer.id);
+    for (const layerId of rasterLayerIds) {
+      if (map.getLayer(layerId)) map.moveLayer(layerId, beforeId);
+    }
+  }
+
+  private _enableDisaster3DView(): void {
+    const map = this._map;
+    if (!map || !this._bottomOvertureLayerId() || map.getPitch() >= 35) return;
+    map.easeTo({ pitch: 45, duration: 800 });
   }
 
   private _registerLayer(layer: GeoLibreNativeLayerRegistration): void {
@@ -4932,6 +5068,43 @@ function normalizeAgentBBox(value: BBox | string): BBox | undefined {
 
 function isLocalDisasterBBox(bbox: BBox): boolean {
   return bbox[2] - bbox[0] <= 20 && bbox[3] - bbox[1] <= 20;
+}
+
+function numericBuildingProperty(
+  properties: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const raw = properties[key];
+  const value =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : Number.NaN;
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function withBuildingExtrusionHeights(
+  collection: GeoFeatureCollection,
+  offsetMeters = 0,
+): GeoFeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: collection.features.map((feature) => {
+      const properties = feature.properties ?? {};
+      const explicitHeight = numericBuildingProperty(properties, "height");
+      const floors = numericBuildingProperty(properties, "num_floors");
+      const estimatedHeight = explicitHeight ?? (floors ? floors * 3 : 8);
+      return {
+        ...feature,
+        properties: {
+          ...properties,
+          _opera_height_m:
+            Math.max(3, Math.min(estimatedHeight, 300)) + offsetMeters,
+        },
+      };
+    }),
+  };
 }
 
 function resolveProductForAgent(value: string): ReturnType<typeof getProduct> {

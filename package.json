@@ -119,6 +119,7 @@
     "@strands-agents/sdk": "^1.7.0",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-opener": "^2.5.4",
+    "@turf/unkink-polygon": "^7.3.5",
     "maplibre-gl-geoagent": "^0.5.4",
     "zod": "^4.4.3"
   }

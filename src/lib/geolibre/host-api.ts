@@ -84,6 +84,12 @@ export interface GeoLibreNativeLayerStyle {
   strokeWidth?: number;
   fillOpacity?: number;
   circleRadius?: number;
+  extrusionEnabled?: boolean;
+  extrusionColor?: string;
+  extrusionOpacity?: number;
+  extrusionHeightProperty?: string;
+  extrusionHeightScale?: number;
+  extrusionBase?: number;
 }
 
 /**
