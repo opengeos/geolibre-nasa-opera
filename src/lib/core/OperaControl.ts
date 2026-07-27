@@ -6,7 +6,11 @@ import type {
   Map as MapLibreMap,
   MapMouseEvent,
 } from "maplibre-gl";
-import type { GeoLibreNativeLayerRegistration } from "../geolibre/host-api";
+import type {
+  GeoLibreNativeLayerRegistration,
+  GeoLibreOvertureQuery,
+  GeoLibreOvertureQueryResult,
+} from "../geolibre/host-api";
 import {
   getLayerBand,
   granuleBands,
@@ -45,11 +49,7 @@ import {
   type StatisticsResult,
   type TileJson,
 } from "../opera/titiler";
-import type {
-  BBox,
-  GranuleBand,
-  OperaGranule,
-} from "../opera/types";
+import type { BBox, GranuleBand, OperaGranule } from "../opera/types";
 import {
   lockBenchmark,
   summarizeBenchmark,
@@ -60,12 +60,20 @@ import {
 } from "../opera/benchmark";
 import { fetchOsmBuildings } from "../opera/buildings";
 import { deriveFloodExtent } from "../opera/flood-extent";
-import { buildingsInFlood, type GeoFeatureCollection } from "../opera/geometry";
-import { searchNews, type NewsResult } from "../opera/news";
 import {
-  buildOnePagerHtml,
-  type OnePagerImpact,
-} from "../opera/one-pager";
+  buildingsInFlood,
+  dedupeOvertureFeatures,
+  transportationInFlood,
+  type GeoFeatureCollection,
+} from "../opera/geometry";
+import { searchNews, type NewsResult } from "../opera/news";
+import { buildOnePagerHtml, type OnePagerImpact } from "../opera/one-pager";
+import {
+  fetchWorldPopPopulation,
+  WORLDPOP_LATEST_YEAR,
+  worldPopImageUrl,
+} from "../opera/population";
+import { fetchSentinel2Scene } from "../opera/satellite-imagery";
 
 /**
  * Persisted state for the OPERA control. Saved with the GeoLibre project via the
@@ -113,6 +121,15 @@ export interface OperaControlOptions {
   registerLayer?: (layer: GeoLibreNativeLayerRegistration) => void;
   /** Remove a previously registered native layer by id. */
   unregisterLayer?: (id: string) => void;
+  /** Activate another GeoLibre plugin and optionally apply a partial state. */
+  activatePlugin?: (
+    pluginId: string,
+    state?: unknown,
+  ) => boolean | Promise<boolean>;
+  /** Query bounded official Overture PMTiles through the GeoLibre host. */
+  queryOvertureFeatures?: (
+    query: GeoLibreOvertureQuery,
+  ) => Promise<GeoLibreOvertureQueryResult>;
   /** Fit the map to a `[w, s, e, n]` box. */
   fitBounds?: (bounds: BBox) => void;
   /** Read the current map extent as a `[w, s, e, n]` box. */
@@ -333,6 +350,107 @@ export interface OperaAgentBuildingsResult {
   layerId?: string;
 }
 
+export interface OperaAgentOvertureParams {
+  /** Draw styled flooded-building and impacted-transportation layers. */
+  addLayers?: boolean;
+  /** Sum flooded building footprint area. */
+  computeBuildingArea?: boolean;
+  /** Maximum PMTiles read per theme. */
+  maxTiles?: number;
+  /** Maximum decoded features returned per theme. */
+  maxFeatures?: number;
+}
+
+export interface OperaAgentOvertureResult {
+  ok: boolean;
+  status: string;
+  release?: string;
+  contextPluginActivated: boolean;
+  buildings: {
+    total: number;
+    floodedCount: number;
+    fraction: number;
+    floodedAreaKm2?: number;
+    source: string;
+    layerId?: string;
+  };
+  transportation: {
+    candidateSegments: number;
+    impactedSegmentCount: number;
+    impactedLengthKm: number;
+    bySubtype: Record<string, number>;
+    source: string;
+    layerId?: string;
+  };
+}
+
+export interface OperaAgentPopulationParams {
+  /** WorldPop data year. Public global coverage is currently 2000-2020. */
+  year?: number;
+  /** Draw the styled WorldPop 100 m population image layer. */
+  addLayer?: boolean;
+}
+
+export interface OperaAgentPopulationResult {
+  ok: boolean;
+  status: string;
+  totalPopulation: number;
+  year: number;
+  source: string;
+  layerId?: string;
+}
+
+export interface OperaAgentDisasterContextParams {
+  /** Disaster type, e.g. flood, earthquake, volcanic eruption, or landslide. */
+  hazard: string;
+  /** Event/AOI label used for the population layer. */
+  eventName?: string;
+  /** Event AOI. Omit to use the panel bbox or current map extent. */
+  bbox?: BBox | string;
+  /** WorldPop data year. */
+  populationYear?: number;
+  /** Add a WorldPop population image for the event AOI. */
+  addPopulationLayer?: boolean;
+}
+
+export interface OperaAgentDisasterContextResult {
+  ok: boolean;
+  status: string;
+  hazard: string;
+  bbox?: BBox;
+  overtureContextActivated: boolean;
+  population?: {
+    totalPopulation: number;
+    year: number;
+    source: string;
+    layerId?: string;
+  };
+}
+
+export interface OperaAgentSentinel2Params {
+  /** Event AOI. Omit to use the flood benchmark or current map extent. */
+  bbox?: BBox | string;
+  /** Inclusive imagery search start, YYYY-MM-DD. */
+  start: string;
+  /** Inclusive imagery search end, YYYY-MM-DD. */
+  end: string;
+  /** Maximum scene cloud cover percentage. Defaults to 30. */
+  maxCloudCover?: number;
+  /** Raster opacity. Defaults to 0.78. */
+  opacity?: number;
+}
+
+export interface OperaAgentSentinel2Result {
+  ok: boolean;
+  status: string;
+  itemId?: string;
+  datetime?: string;
+  cloudCover?: number;
+  provider: string;
+  layerId?: string;
+  stacItemUrl?: string;
+}
+
 export interface OperaAgentNewsParams {
   /** Search query, e.g. "Valencia flood October 2024 deaths damages". */
   query: string;
@@ -356,6 +474,16 @@ export interface OperaAgentOnePagerParams {
     total: number;
     fraction: number;
     floodedAreaKm2?: number;
+    source?: string;
+  };
+  population?: {
+    totalPopulation: number;
+    year: number;
+    source?: string;
+  };
+  transportation?: {
+    impactedSegmentCount: number;
+    impactedLengthKm: number;
     source?: string;
   };
   /** Map PNG data URL; when omitted the control captures the current map. */
@@ -689,7 +817,11 @@ export class OperaControl implements IControl {
   }
 
   getAgentContext(): OperaAgentResult & {
-    products: Array<{ shortName: string; shortTitle: string; description: string }>;
+    products: Array<{
+      shortName: string;
+      shortTitle: string;
+      description: string;
+    }>;
     selectedGranuleIds: string[];
     endpoint: string;
     bbox: string;
@@ -719,9 +851,13 @@ export class OperaControl implements IControl {
     };
   }
 
-  async searchForAgent(params: OperaAgentSearchParams): Promise<OperaAgentResult> {
+  async searchForAgent(
+    params: OperaAgentSearchParams,
+  ): Promise<OperaAgentResult> {
     this.expand();
-    const product = params.product ? resolveProductForAgent(params.product) : undefined;
+    const product = params.product
+      ? resolveProductForAgent(params.product)
+      : undefined;
     if (params.product && !product) {
       return {
         ok: false,
@@ -759,7 +895,10 @@ export class OperaControl implements IControl {
   }
 
   async displayForAgent(params: OperaAgentDisplayParams): Promise<
-    OperaAgentResult & { displayedLayerIds: string[]; selectedGranuleIds: string[] }
+    OperaAgentResult & {
+      displayedLayerIds: string[];
+      selectedGranuleIds: string[];
+    }
   > {
     this.expand();
     const selected = this._selectGranulesForAgent(
@@ -784,16 +923,21 @@ export class OperaControl implements IControl {
     }
     if (params.colormapName !== undefined) {
       this._state.colormapName = params.colormapName;
-      if (this._colormapSelect) this._colormapSelect.value = params.colormapName;
+      if (this._colormapSelect)
+        this._colormapSelect.value = params.colormapName;
     }
     if (params.expression !== undefined) {
       this._setExpression(params.expression);
     }
     const before = new Set(this._registeredLayerIds);
     await this._onDisplay({ waterOnly: params.waterOnly });
-    const displayedLayerIds = this._registeredLayerIds.filter((id) => !before.has(id));
+    const displayedLayerIds = this._registeredLayerIds.filter(
+      (id) => !before.has(id),
+    );
     return {
-      ok: displayedLayerIds.length > 0 && !/^Display failed:/i.test(this._lastStatus),
+      ok:
+        displayedLayerIds.length > 0 &&
+        !/^Display failed:/i.test(this._lastStatus),
       status: this._lastStatus,
       product: this._state.product,
       granules: this._agentGranuleSummaries(),
@@ -811,7 +955,8 @@ export class OperaControl implements IControl {
     if (!tileUrl) {
       return { ok: false, status: "TileJSON did not include any tile URL." };
     }
-    const layerId = params.id ?? `titiler-cmr-${slug(params.name) || Date.now()}`;
+    const layerId =
+      params.id ?? `titiler-cmr-${slug(params.name) || Date.now()}`;
     this._registerLayer({
       id: layerId,
       name: params.name,
@@ -825,6 +970,9 @@ export class OperaControl implements IControl {
           : {}),
         ...(params.tilejson.maxzoom != null
           ? { maxzoom: params.tilejson.maxzoom }
+          : {}),
+        ...(typeof params.metadata?.attribution === "string"
+          ? { attribution: params.metadata.attribution }
           : {}),
       },
       nativeLayerIds: [],
@@ -891,8 +1039,14 @@ export class OperaControl implements IControl {
           count: 20,
         }),
       ]);
-      const beforeGranule = closestGranule(beforeSearch.granules, params.beforeDate);
-      const afterGranule = closestGranule(afterSearch.granules, params.afterDate);
+      const beforeGranule = closestGranule(
+        beforeSearch.granules,
+        params.beforeDate,
+      );
+      const afterGranule = closestGranule(
+        afterSearch.granules,
+        params.afterDate,
+      );
       if (!beforeGranule || !afterGranule) {
         return {
           ok: false,
@@ -910,27 +1064,32 @@ export class OperaControl implements IControl {
       this._state.end = afterRange.end;
       this._state.count = 2;
       this._state.expression = params.expression ?? "";
-      this._state.rescale = params.rescale ?? bandRenderDefaults(product.shortName, band).rescale;
+      this._state.rescale =
+        params.rescale ?? bandRenderDefaults(product.shortName, band).rescale;
       this._state.colormapName =
-        params.colormapName ?? bandRenderDefaults(product.shortName, band).colormapName;
+        params.colormapName ??
+        bandRenderDefaults(product.shortName, band).colormapName;
       this._granules = [beforeGranule, afterGranule];
       this._renderResults();
       this._syncForm();
-      this._options.addGeoJsonLayer?.(`OPERA ${product.shortTitle} Change Pair`, {
-        type: "FeatureCollection",
-        features: [beforeGranule, afterGranule]
-          .filter((granule) => granule.geometry)
-          .map((granule, index) => ({
-            type: "Feature",
-            geometry: granule.geometry,
-            properties: {
-              _operaGranuleId: granule.id,
-              id: granule.id,
-              role: index === 0 ? "before" : "after",
-              beginDate: granule.beginDate ?? "",
-            },
-          })),
-      });
+      this._options.addGeoJsonLayer?.(
+        `OPERA ${product.shortTitle} Change Pair`,
+        {
+          type: "FeatureCollection",
+          features: [beforeGranule, afterGranule]
+            .filter((granule) => granule.geometry)
+            .map((granule, index) => ({
+              type: "Feature",
+              geometry: granule.geometry,
+              properties: {
+                _operaGranuleId: granule.id,
+                id: granule.id,
+                role: index === 0 ? "before" : "after",
+                beginDate: granule.beginDate ?? "",
+              },
+            })),
+        },
+      );
       this._options.fitBounds?.(this._combinedBounds(this._granules) ?? bbox);
 
       const beforeDisplay = await this.displayForAgent({
@@ -948,8 +1107,20 @@ export class OperaControl implements IControl {
         expression: params.expression,
       });
       const [beforeStats, afterStats] = await Promise.all([
-        this._statsForChange(product.shortName, beforeGranule, band, bbox, params.expression),
-        this._statsForChange(product.shortName, afterGranule, band, bbox, params.expression),
+        this._statsForChange(
+          product.shortName,
+          beforeGranule,
+          band,
+          bbox,
+          params.expression,
+        ),
+        this._statsForChange(
+          product.shortName,
+          afterGranule,
+          band,
+          bbox,
+          params.expression,
+        ),
       ]);
       const change = changeDelta(beforeStats, afterStats);
       const status =
@@ -984,7 +1155,10 @@ export class OperaControl implements IControl {
         ],
       };
       if (!hasStatisticError(beforeStats) && !hasStatisticError(afterStats)) {
-        result.derivedLayer = this._addChangeSummaryLayer(product.shortTitle, result);
+        result.derivedLayer = this._addChangeSummaryLayer(
+          product.shortTitle,
+          result,
+        );
       }
       this._lastChangeResult = result;
       this._updateReportButton();
@@ -1074,27 +1248,32 @@ export class OperaControl implements IControl {
       this._state.end = params.end;
       this._state.count = granules.length;
       this._state.expression = params.expression ?? "";
-      this._state.rescale = params.rescale ?? bandRenderDefaults(product.shortName, band).rescale;
+      this._state.rescale =
+        params.rescale ?? bandRenderDefaults(product.shortName, band).rescale;
       this._state.colormapName =
-        params.colormapName ?? bandRenderDefaults(product.shortName, band).colormapName;
+        params.colormapName ??
+        bandRenderDefaults(product.shortName, band).colormapName;
       this._granules = granules;
       this._renderResults();
       this._syncForm();
-      this._options.addGeoJsonLayer?.(`OPERA ${product.shortTitle} Time Series`, {
-        type: "FeatureCollection",
-        features: granules
-          .filter((granule) => granule.geometry)
-          .map((granule, index) => ({
-            type: "Feature",
-            geometry: granule.geometry,
-            properties: {
-              _operaGranuleId: granule.id,
-              id: granule.id,
-              sequence: index + 1,
-              beginDate: granule.beginDate ?? "",
-            },
-          })),
-      });
+      this._options.addGeoJsonLayer?.(
+        `OPERA ${product.shortTitle} Time Series`,
+        {
+          type: "FeatureCollection",
+          features: granules
+            .filter((granule) => granule.geometry)
+            .map((granule, index) => ({
+              type: "Feature",
+              geometry: granule.geometry,
+              properties: {
+                _operaGranuleId: granule.id,
+                id: granule.id,
+                sequence: index + 1,
+                beginDate: granule.beginDate ?? "",
+              },
+            })),
+        },
+      );
       this._options.fitBounds?.(this._combinedBounds(this._granules) ?? bbox);
 
       let displayedLayerIds: string[] = [];
@@ -1129,7 +1308,9 @@ export class OperaControl implements IControl {
       );
       const stats = observations
         .map((item) => item.statistics)
-        .filter((item): item is Record<string, number | string | null> => !!item);
+        .filter(
+          (item): item is Record<string, number | string | null> => !!item,
+        );
       const trends =
         stats.length >= 2 ? changeDelta(stats[0], stats[stats.length - 1]) : {};
       const errorCount = stats.filter(hasStatisticError).length;
@@ -1265,25 +1446,36 @@ export class OperaControl implements IControl {
     this.expand();
     const shortName = "OPERA_L3_DSWX-HLS_V1";
     const bbox =
-      (params.bbox !== undefined ? normalizeAgentBBox(params.bbox) : undefined) ??
-      normalizeAgentBBox(this._state.bbox);
+      (params.bbox !== undefined
+        ? normalizeAgentBBox(params.bbox)
+        : undefined) ?? normalizeAgentBBox(this._state.bbox);
     if (!bbox) {
       return {
         ok: false,
-        status: "Provide a bbox [west,south,east,north] or set the panel extent first.",
+        status:
+          "Provide a bbox [west,south,east,north] or set the panel extent first.",
         dswxLayerIds: [],
         granulesUsed: 0,
       };
     }
     const product = getProduct(shortName);
     if (!product) {
-      return { ok: false, status: `Unknown product ${shortName}.`, dswxLayerIds: [], granulesUsed: 0 };
+      return {
+        ok: false,
+        status: `Unknown product ${shortName}.`,
+        dswxLayerIds: [],
+        granulesUsed: 0,
+      };
     }
     const maxGranules = Math.min(Math.max(params.maxGranules ?? 6, 1), 12);
 
     // 1) Search DSWx-HLS over the AOI + dates (also populates the panel/table).
     const search = await this.searchForAgent({
-      product: shortName, bbox, start: params.start, end: params.end, count: maxGranules,
+      product: shortName,
+      bbox,
+      start: params.start,
+      end: params.end,
+      count: maxGranules,
     });
     const granules = this._granules.slice(0, maxGranules);
     if (!search.ok || granules.length === 0) {
@@ -1299,7 +1491,8 @@ export class OperaControl implements IControl {
     //    snapshot), and collect the tile templates to vectorize.
     const band = product.render.bands?.[0] ?? "B01_WTR";
     const colormap = colormapForBand(shortName, band, { waterOnly: true });
-    const conceptId = granules[0].conceptId ?? (await resolveConceptId(shortName));
+    const conceptId =
+      granules[0].conceptId ?? (await resolveConceptId(shortName));
     const endpoint = this._state.endpoint || DEFAULT_TITILER_CMR_ENDPOINT;
     const tileTemplates: string[] = [];
     const dswxLayerIds: string[] = [];
@@ -1307,8 +1500,13 @@ export class OperaControl implements IControl {
     for (const g of granules) {
       try {
         const url = buildTileJsonUrl({
-          endpoint, conceptId, backend: product.render.backend, granuleUr: g.id,
-          bands: [band], bandsRegex: product.render.bandsRegex, colormap,
+          endpoint,
+          conceptId,
+          backend: product.render.backend,
+          granuleUr: g.id,
+          bands: [band],
+          bandsRegex: product.render.bandsRegex,
+          colormap,
         });
         const tj = await fetchTileJson(url);
         if (!tj.tiles?.[0]) continue;
@@ -1326,7 +1524,12 @@ export class OperaControl implements IControl {
       }
     }
     if (tileTemplates.length === 0) {
-      return { ok: false, status: "Could not load DSWx tiles from titiler-cmr.", dswxLayerIds, granulesUsed: 0 };
+      return {
+        ok: false,
+        status: "Could not load DSWx tiles from titiler-cmr.",
+        dswxLayerIds,
+        granulesUsed: 0,
+      };
     }
 
     // 3) Vectorize the observed open + partial surface water into a polygon.
@@ -1337,20 +1540,33 @@ export class OperaControl implements IControl {
     } catch (err) {
       const status = `Flood-extent derivation failed: ${err instanceof Error ? err.message : String(err)}`;
       this._setStatus(status);
-      return { ok: false, status, dswxLayerIds, granulesUsed: tileTemplates.length };
+      return {
+        ok: false,
+        status,
+        dswxLayerIds,
+        granulesUsed: tileTemplates.length,
+      };
     }
     if (water.features.length === 0) {
       const status =
         "No OPERA DSWx surface water was observed in the AOI for these dates (or the tiles could not be read). Try a wider date window or a different AOI.";
       this._setStatus(status);
-      return { ok: false, status, dswxLayerIds, granulesUsed: tileTemplates.length };
+      return {
+        ok: false,
+        status,
+        dswxLayerIds,
+        granulesUsed: tileTemplates.length,
+      };
     }
 
     // 4) Lock the derived extent as the working benchmark (OPERA-derived, not QAed).
     const eventName =
-      params.eventName?.trim() || (params.place ? `${params.place} flood` : "OPERA-derived flood");
+      params.eventName?.trim() ||
+      (params.place ? `${params.place} flood` : "OPERA-derived flood");
     const dateLabel =
-      params.start === params.end ? params.start : `${params.start} – ${params.end}`;
+      params.start === params.end
+        ? params.start
+        : `${params.start} – ${params.end}`;
     const lock = this.lockBenchmarkFromGeoJson(
       water,
       { name: eventName, date: dateLabel, location: params.place },
@@ -1361,13 +1577,24 @@ export class OperaControl implements IControl {
       },
     );
     if (!lock.ok) {
-      return { ok: false, status: lock.status, dswxLayerIds, granulesUsed: tileTemplates.length };
+      return {
+        ok: false,
+        status: lock.status,
+        dswxLayerIds,
+        granulesUsed: tileTemplates.length,
+      };
     }
     const status = `Derived an OPERA flood extent from ${tileTemplates.length} DSWx granule(s): ${
       lock.benchmark?.areaKm2.toFixed(2) ?? "?"
     } km². This is observed OPERA water, not a human-QAed benchmark.`;
     this._setStatus(status);
-    return { ok: true, status, benchmark: lock.benchmark, dswxLayerIds, granulesUsed: tileTemplates.length };
+    return {
+      ok: true,
+      status,
+      benchmark: lock.benchmark,
+      dswxLayerIds,
+      granulesUsed: tileTemplates.length,
+    };
   }
 
   /**
@@ -1436,12 +1663,407 @@ export class OperaControl implements IControl {
     };
   }
 
+  /**
+   * Query GeoLibre's Overture PMTiles and calculate building and transportation
+   * exposure against the locked flood extent.
+   */
+  async overtureInFloodForAgent(
+    params: OperaAgentOvertureParams = {},
+  ): Promise<OperaAgentOvertureResult> {
+    const benchmark = this._state.benchmark;
+    const emptyResult = (
+      status: string,
+      contextPluginActivated = false,
+    ): OperaAgentOvertureResult => ({
+      ok: false,
+      status,
+      contextPluginActivated,
+      buildings: {
+        total: 0,
+        floodedCount: 0,
+        fraction: 0,
+        source: "Overture Maps",
+      },
+      transportation: {
+        candidateSegments: 0,
+        impactedSegmentCount: 0,
+        impactedLengthKm: 0,
+        bySubtype: {},
+        source: "Overture Maps",
+      },
+    });
+    if (!benchmark) return emptyResult(BENCHMARK_REQUIRED);
+    if (!this._options.queryOvertureFeatures) {
+      return emptyResult(
+        "This GeoLibre host does not expose bounded Overture queries. Update GeoLibre or use buildings_in_flood for the OSM fallback.",
+      );
+    }
+
+    this.expand();
+    const contextPluginActivated =
+      await this._activateOvertureDisasterContext();
+
+    this._setStatus("Querying Overture buildings and transportation…");
+    const query = this._options.queryOvertureFeatures;
+    const limits = {
+      maxTiles: params.maxTiles ?? 512,
+      maxFeatures: params.maxFeatures ?? 100_000,
+    };
+    let buildingQuery: GeoLibreOvertureQueryResult;
+    let transportationQuery: GeoLibreOvertureQueryResult;
+    try {
+      [buildingQuery, transportationQuery] = await Promise.all([
+        query({
+          theme: "buildings",
+          sourceLayer: "building",
+          bbox: benchmark.bbox,
+          ...limits,
+        }),
+        query({
+          theme: "transportation",
+          sourceLayer: "segment",
+          bbox: benchmark.bbox,
+          filterGeometry: benchmark.water,
+          filterMode: "intersects",
+          ...limits,
+        }),
+      ]);
+    } catch (err) {
+      const status = `Overture query failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+      this._setStatus(status);
+      return emptyResult(status, contextPluginActivated);
+    }
+    if (buildingQuery.truncated || transportationQuery.truncated) {
+      const status =
+        "The Overture result reached its feature limit. Zoom to a smaller disaster area or raise max_features before calculating exposure.";
+      this._setStatus(status);
+      return emptyResult(status, contextPluginActivated);
+    }
+
+    const buildings = dedupeOvertureFeatures(
+      buildingQuery.data as unknown as GeoFeatureCollection,
+    );
+    const buildingImpact = buildingsInFlood(buildings, benchmark.water, {
+      computeArea: params.computeBuildingArea,
+    });
+    const transportationImpact = transportationInFlood(
+      transportationQuery.data as unknown as GeoFeatureCollection,
+      benchmark.water,
+    );
+
+    let buildingsLayerId: string | undefined;
+    let transportationLayerId: string | undefined;
+    if (params.addLayers !== false) {
+      if (buildingImpact.floodedFeatures.length > 0) {
+        buildingsLayerId = this._addStyledGeoJsonImpactLayer({
+          id: "opera-impact-overture-buildings",
+          name: `Flooded Overture buildings - ${benchmark.event.name}`,
+          data: {
+            type: "FeatureCollection",
+            features: buildingImpact.floodedFeatures,
+          },
+          geometry: "fill",
+          color: "#dc2626",
+          opacity: 0.68,
+          strokeColor: "#7f1d1d",
+          strokeWidth: 1,
+        });
+      }
+      if (transportationImpact.impactedFeatures.length > 0) {
+        transportationLayerId = this._addStyledGeoJsonImpactLayer({
+          id: "opera-impact-overture-transportation",
+          name: `Flood-impacted transportation - ${benchmark.event.name}`,
+          data: {
+            type: "FeatureCollection",
+            features: transportationImpact.impactedFeatures,
+          },
+          geometry: "line",
+          color: "#f97316",
+          opacity: 0.92,
+          strokeWidth: 3,
+        });
+      }
+    }
+
+    const status =
+      `Overture ${buildingQuery.release}: ${buildingImpact.floodedCount.toLocaleString()} flooded ` +
+      `building(s) and ${transportationImpact.impactedLengthKm.toFixed(1)} km of impacted transportation.`;
+    this._setStatus(status);
+    return {
+      ok: true,
+      status,
+      release: buildingQuery.release,
+      contextPluginActivated,
+      buildings: {
+        total: buildingImpact.total,
+        floodedCount: buildingImpact.floodedCount,
+        fraction: buildingImpact.fraction,
+        floodedAreaKm2: buildingImpact.floodedAreaKm2,
+        source: `Overture Maps ${buildingQuery.release}`,
+        layerId: buildingsLayerId,
+      },
+      transportation: {
+        candidateSegments: transportationImpact.total,
+        impactedSegmentCount: transportationImpact.impactedCount,
+        impactedLengthKm: transportationImpact.impactedLengthKm,
+        bySubtype: transportationImpact.bySubtype,
+        source: `Overture Maps ${transportationQuery.release}`,
+        layerId: transportationLayerId,
+      },
+    };
+  }
+
+  /**
+   * Calculate population within the locked flood extent and add a styled
+   * WorldPop population image layer for the benchmark area.
+   */
+  async populationInFloodForAgent(
+    params: OperaAgentPopulationParams = {},
+  ): Promise<OperaAgentPopulationResult> {
+    const benchmark = this._state.benchmark;
+    const year = params.year ?? WORLDPOP_LATEST_YEAR;
+    if (!benchmark) {
+      return {
+        ok: false,
+        status: BENCHMARK_REQUIRED,
+        totalPopulation: 0,
+        year,
+        source: "WorldPop",
+      };
+    }
+    this.expand();
+    this._setStatus(`Calculating ${year} WorldPop exposure…`);
+    try {
+      const population = await fetchWorldPopPopulation(benchmark.water, {
+        year,
+      });
+      const layerId =
+        params.addLayer === false
+          ? undefined
+          : this._addWorldPopLayer(
+              worldPopImageUrl(benchmark.bbox, year),
+              benchmark.bbox,
+              year,
+              benchmark.event.name,
+            );
+      const rounded = Math.round(population.totalPopulation);
+      const status =
+        `${rounded.toLocaleString()} people live within the flood extent ` +
+        `according to WorldPop ${year}. This is modeled residential population, not an event displacement count.`;
+      this._setStatus(status);
+      return {
+        ok: true,
+        status,
+        totalPopulation: population.totalPopulation,
+        year,
+        source: population.source,
+        layerId,
+      };
+    } catch (err) {
+      const status = `WorldPop analysis failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+      this._setStatus(status);
+      return {
+        ok: false,
+        status,
+        totalPopulation: 0,
+        year,
+        source: "WorldPop",
+      };
+    }
+  }
+
+  /**
+   * Map Overture and WorldPop context for any disaster AOI. These layers are
+   * contextual until a hazard polygon is available for an exposure overlay.
+   */
+  async mapDisasterContextForAgent(
+    params: OperaAgentDisasterContextParams,
+  ): Promise<OperaAgentDisasterContextResult> {
+    const hazard = params.hazard?.trim();
+    if (!hazard) {
+      return {
+        ok: false,
+        status: "Provide a disaster type.",
+        hazard: "",
+        overtureContextActivated: false,
+      };
+    }
+    const bbox =
+      (params.bbox !== undefined
+        ? normalizeAgentBBox(params.bbox)
+        : undefined) ?? this._currentBBox();
+    if (!bbox) {
+      return {
+        ok: false,
+        status:
+          "Provide a valid disaster bbox or navigate the map to the event area.",
+        hazard,
+        overtureContextActivated: false,
+      };
+    }
+
+    this.expand();
+    this._options.fitBounds?.(bbox);
+    const overtureContextActivated =
+      await this._activateOvertureDisasterContext();
+    const year = params.populationYear ?? WORLDPOP_LATEST_YEAR;
+    const [west, south, east, north] = bbox;
+    const area: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [west, south],
+                [east, south],
+                [east, north],
+                [west, north],
+                [west, south],
+              ],
+            ],
+          },
+        },
+      ],
+    };
+    this._setStatus(`Mapping ${hazard} exposure context…`);
+    try {
+      const population = await fetchWorldPopPopulation(area, { year });
+      const layerId =
+        params.addPopulationLayer === false
+          ? undefined
+          : this._addWorldPopLayer(
+              worldPopImageUrl(bbox, year),
+              bbox,
+              year,
+              params.eventName?.trim() || `${hazard} AOI`,
+            );
+      const status =
+        `Mapped Overture buildings and transportation plus WorldPop ${year} context for the ${hazard} AOI. ` +
+        "These are contextual assets and population, not measured impacts, until a hazard extent is supplied.";
+      this._setStatus(status);
+      return {
+        ok: true,
+        status,
+        hazard,
+        bbox,
+        overtureContextActivated,
+        population: {
+          totalPopulation: population.totalPopulation,
+          year,
+          source: population.source,
+          layerId,
+        },
+      };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      const status = overtureContextActivated
+        ? `Mapped Overture context, but WorldPop failed: ${detail}`
+        : `Disaster context mapping failed: ${detail}`;
+      this._setStatus(status);
+      return {
+        ok: overtureContextActivated,
+        status,
+        hazard,
+        bbox,
+        overtureContextActivated,
+      };
+    }
+  }
+
+  /**
+   * Find and display a low-cloud Sentinel-2 true-color scene for the disaster
+   * window using the public Planetary Computer STAC and tile APIs.
+   */
+  async sentinel2ImageryForAgent(
+    params: OperaAgentSentinel2Params,
+  ): Promise<OperaAgentSentinel2Result> {
+    const provider = "Microsoft Planetary Computer / Copernicus Sentinel-2";
+    const bbox =
+      (params.bbox !== undefined
+        ? normalizeAgentBBox(params.bbox)
+        : undefined) ??
+      this._state.benchmark?.bbox ??
+      this._currentBBox();
+    if (!bbox) {
+      return {
+        ok: false,
+        status:
+          "Provide a valid Sentinel-2 bbox or navigate the map to the event area.",
+        provider,
+      };
+    }
+    this.expand();
+    this._setStatus("Searching open Sentinel-2 event imagery…");
+    try {
+      const scene = await fetchSentinel2Scene({
+        bbox,
+        start: params.start,
+        end: params.end,
+        maxCloudCover: params.maxCloudCover,
+      });
+      const date = scene.datetime.slice(0, 10);
+      const registered = this.registerTileJsonForAgent({
+        id: `sentinel-2-${slug(scene.itemId)}`,
+        name: `Sentinel-2 true color - ${date}`,
+        tilejson: scene.tilejson,
+        opacity: Math.max(0, Math.min(1, params.opacity ?? 0.78)),
+        fitBounds: false,
+        metadata: {
+          sourceKind: "sentinel-2-event-imagery",
+          provider: scene.provider,
+          attribution:
+            "Copernicus Sentinel-2 data via Microsoft Planetary Computer",
+          collection: "sentinel-2-l2a",
+          itemId: scene.itemId,
+          datetime: scene.datetime,
+          cloudCover: scene.cloudCover,
+          stacItemUrl: scene.stacItemUrl,
+        },
+      });
+      if (!registered.ok) {
+        return { ok: false, status: registered.status, provider };
+      }
+      this._options.fitBounds?.(bbox);
+      const cloudLabel =
+        scene.cloudCover === undefined
+          ? ""
+          : ` with ${scene.cloudCover.toFixed(1)}% scene cloud cover`;
+      const status = `Added Sentinel-2 true-color imagery from ${date}${cloudLabel}.`;
+      this._setStatus(status);
+      return {
+        ok: true,
+        status,
+        itemId: scene.itemId,
+        datetime: scene.datetime,
+        cloudCover: scene.cloudCover,
+        provider: scene.provider,
+        layerId: registered.layerId,
+        stacItemUrl: scene.stacItemUrl,
+      };
+    } catch (err) {
+      const status = `Sentinel-2 imagery failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+      this._setStatus(status);
+      return { ok: false, status, provider };
+    }
+  }
+
   /** Search reputable news for quantified, citable impact figures. */
   async newsImpactSearchForAgent(
     params: OperaAgentNewsParams,
   ): Promise<OperaAgentNewsResult> {
     const query = params.query?.trim();
-    if (!query) return { ok: false, status: "Provide a search query.", results: [] };
+    if (!query)
+      return { ok: false, status: "Provide a search query.", results: [] };
     this._setStatus("Searching news for impact figures…");
     try {
       const { results, answer } = await searchNews(query, {
@@ -1518,6 +2140,8 @@ export class OperaControl implements IControl {
         render: benchmark.render,
       },
       buildings: params.buildings,
+      population: params.population,
+      transportation: params.transportation,
       impacts: params.impacts,
       generatedAt: new Date().toISOString().slice(0, 10),
       credit: "NASA OPERA · GeoLibre",
@@ -1566,6 +2190,201 @@ export class OperaControl implements IControl {
   }
 
   // --- Layer registration ------------------------------------------------
+
+  private async _activateOvertureDisasterContext(): Promise<boolean> {
+    try {
+      return (
+        (await this._options.activatePlugin?.("maplibre-gl-overture-maps", {
+          collapsed: true,
+          inspect: true,
+          themes: {
+            buildings: {
+              expanded: true,
+              layers: {
+                building: {
+                  visible: true,
+                  opacity: 0.38,
+                  color: "#64748b",
+                  size: 1,
+                },
+                building_part: { visible: false },
+              },
+            },
+            transportation: {
+              expanded: true,
+              layers: {
+                segment: {
+                  visible: true,
+                  opacity: 0.7,
+                  color: "#0f766e",
+                  size: 1.5,
+                },
+                connector: { visible: false },
+              },
+            },
+          },
+        })) ?? false
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private _removeManagedMapLayer(
+    id: string,
+    nativeLayerIds: string[],
+    sourceId: string,
+  ): void {
+    try {
+      this._options.unregisterLayer?.(id);
+    } catch {
+      // Continue with direct MapLibre cleanup.
+    }
+    this._registeredLayerIds = this._registeredLayerIds.filter(
+      (registeredId) => registeredId !== id,
+    );
+    if (!this._map) return;
+    for (const layerId of [...nativeLayerIds].reverse()) {
+      if (this._map.getLayer(layerId)) this._map.removeLayer(layerId);
+    }
+    if (this._map.getSource(sourceId)) this._map.removeSource(sourceId);
+  }
+
+  private _addStyledGeoJsonImpactLayer(options: {
+    id: string;
+    name: string;
+    data: GeoFeatureCollection;
+    geometry: "fill" | "line";
+    color: string;
+    opacity: number;
+    strokeColor?: string;
+    strokeWidth: number;
+  }): string | undefined {
+    const map = this._map;
+    if (!map) {
+      this._options.addGeoJsonLayer?.(options.name, options.data);
+      return undefined;
+    }
+    const sourceId = `${options.id}-source`;
+    const nativeLayerIds =
+      options.geometry === "fill"
+        ? [`${options.id}-fill`, `${options.id}-outline`]
+        : [`${options.id}-line`];
+    this._removeManagedMapLayer(options.id, nativeLayerIds, sourceId);
+    map.addSource(sourceId, {
+      type: "geojson",
+      data: options.data as never,
+    });
+    if (options.geometry === "fill") {
+      map.addLayer({
+        id: nativeLayerIds[0],
+        type: "fill",
+        source: sourceId,
+        paint: {
+          "fill-color": options.color,
+          "fill-opacity": options.opacity,
+        },
+      });
+      map.addLayer({
+        id: nativeLayerIds[1],
+        type: "line",
+        source: sourceId,
+        paint: {
+          "line-color": options.strokeColor ?? options.color,
+          "line-opacity": 1,
+          "line-width": options.strokeWidth,
+        },
+      });
+    } else {
+      map.addLayer({
+        id: nativeLayerIds[0],
+        type: "line",
+        source: sourceId,
+        paint: {
+          "line-color": options.color,
+          "line-opacity": options.opacity,
+          "line-width": options.strokeWidth,
+        },
+      });
+    }
+    this._registerLayer({
+      id: options.id,
+      name: options.name,
+      type: "geojson",
+      nativeLayerIds,
+      sourceIds: [sourceId],
+      geojson: options.data,
+      opacity: 1,
+      style: {
+        fillColor: options.color,
+        fillOpacity: options.geometry === "fill" ? options.opacity : 0,
+        strokeColor: options.strokeColor ?? options.color,
+        strokeWidth: options.strokeWidth,
+      },
+      metadata: {
+        sourceKind: "opera-disaster-impact",
+        interactive: true,
+      },
+    });
+    return options.id;
+  }
+
+  private _addWorldPopLayer(
+    imageUrl: string,
+    bbox: BBox,
+    year: number,
+    eventName: string,
+  ): string | undefined {
+    const map = this._map;
+    if (!map) return undefined;
+    const id = "opera-impact-worldpop";
+    const sourceId = `${id}-source`;
+    const layerId = `${id}-raster`;
+    this._removeManagedMapLayer(id, [layerId], sourceId);
+    const [west, south, east, north] = bbox;
+    map.addSource(sourceId, {
+      type: "image",
+      url: imageUrl,
+      coordinates: [
+        [west, north],
+        [east, north],
+        [east, south],
+        [west, south],
+      ],
+    });
+    const beforeId = map.getLayer("opera-impact-overture-buildings-fill")
+      ? "opera-impact-overture-buildings-fill"
+      : map.getLayer("opera-impact-overture-transportation-line")
+        ? "opera-impact-overture-transportation-line"
+        : undefined;
+    map.addLayer(
+      {
+        id: layerId,
+        type: "raster",
+        source: sourceId,
+        paint: {
+          "raster-opacity": 0.55,
+          "raster-resampling": "linear",
+        },
+      },
+      beforeId,
+    );
+    this._registerLayer({
+      id,
+      name: `WorldPop ${year} population - ${eventName}`,
+      type: "raster",
+      nativeLayerIds: [layerId],
+      sourceIds: [sourceId],
+      opacity: 0.55,
+      metadata: {
+        sourceKind: "worldpop-population",
+        year,
+        imageUrl,
+        attribution: "WorldPop Global Project Population Data",
+      },
+    });
+    return id;
+  }
 
   private _registerLayer(layer: GeoLibreNativeLayerRegistration): void {
     try {
@@ -1853,7 +2672,9 @@ export class OperaControl implements IControl {
     granuleIds: string[] | undefined,
     maxGranules: number | undefined,
   ): OperaGranule[] {
-    const wanted = new Set((granuleIds ?? []).map((id) => id.trim()).filter(Boolean));
+    const wanted = new Set(
+      (granuleIds ?? []).map((id) => id.trim()).filter(Boolean),
+    );
     const limit =
       maxGranules !== undefined && Number.isFinite(maxGranules)
         ? Math.min(Math.max(Math.round(maxGranules), 1), 25)
@@ -1874,7 +2695,11 @@ export class OperaControl implements IControl {
   private _setBandForAgent(band: string): void {
     const token = band.trim();
     if (!token || !this._bandSelect) return;
-    if (!Array.from(this._bandSelect.options).some((option) => option.value === token)) {
+    if (
+      !Array.from(this._bandSelect.options).some(
+        (option) => option.value === token,
+      )
+    ) {
       const opt = document.createElement("option");
       opt.value = token;
       opt.textContent = token;
@@ -1901,7 +2726,9 @@ export class OperaControl implements IControl {
 
   // --- Footprint highlight overlay (self-managed map layers) -------------
 
-  private _highlightData(features: unknown[]): Parameters<GeoJSONSource["setData"]>[0] {
+  private _highlightData(
+    features: unknown[],
+  ): Parameters<GeoJSONSource["setData"]>[0] {
     return {
       type: "FeatureCollection",
       features,
@@ -2087,7 +2914,11 @@ export class OperaControl implements IControl {
 
   private _currentBBox(): BBox | undefined {
     // Fall back to the current map extent when the field is blank or invalid.
-    return this._parseBBox(this._state.bbox) ?? this._options.getMapBounds?.() ?? undefined;
+    return (
+      this._parseBBox(this._state.bbox) ??
+      this._options.getMapBounds?.() ??
+      undefined
+    );
   }
 
   /** Parse a "west, south, east, north" string into a BBox, or undefined. */
@@ -2236,9 +3067,11 @@ export class OperaControl implements IControl {
 
     const importBtn = document.createElement("button");
     importBtn.type = "button";
-    importBtn.className = "plugin-control-button opera-secondary-button opera-block-button";
+    importBtn.className =
+      "plugin-control-button opera-secondary-button opera-block-button";
     importBtn.textContent = "Import benchmark…";
-    importBtn.title = "Load a QAed flood water-extent GeoJSON and lock it as ground truth";
+    importBtn.title =
+      "Load a QAed flood water-extent GeoJSON and lock it as ground truth";
     importBtn.addEventListener("click", () => fileInput.click());
     group.append(importBtn, fileInput);
 
@@ -2478,7 +3311,8 @@ export class OperaControl implements IControl {
     if (!key) return;
     const dir = this._sortDir;
     this._view.sort((a, b) => {
-      if (key === "links") return (a.dataLinks.length - b.dataLinks.length) * dir;
+      if (key === "links")
+        return (a.dataLinks.length - b.dataLinks.length) * dir;
       const av = key === "begin" ? (a.beginDate ?? "") : a.id;
       const bv = key === "begin" ? (b.beginDate ?? "") : b.id;
       return av < bv ? -dir : av > bv ? dir : 0;
@@ -2505,7 +3339,9 @@ export class OperaControl implements IControl {
     group.appendChild(label("Layer / band"));
     const select = document.createElement("select");
     select.className = "plugin-control-input opera-select";
-    select.addEventListener("change", () => this._applyBandDefaults(select.value));
+    select.addEventListener("change", () =>
+      this._applyBandDefaults(select.value),
+    );
     this._bandSelect = select;
     group.appendChild(select);
     return group;
@@ -2522,7 +3358,8 @@ export class OperaControl implements IControl {
     this._state.rescale = defaults.rescale;
     this._state.colormapName = defaults.colormapName;
     if (this._rescaleInput) this._rescaleInput.value = defaults.rescale;
-    if (this._colormapSelect) this._colormapSelect.value = defaults.colormapName;
+    if (this._colormapSelect)
+      this._colormapSelect.value = defaults.colormapName;
     this._refreshExpressionPresets();
   }
 
@@ -2651,7 +3488,8 @@ export class OperaControl implements IControl {
     }
     if (preset.colormapName != null) {
       this._state.colormapName = preset.colormapName;
-      if (this._colormapSelect) this._colormapSelect.value = preset.colormapName;
+      if (this._colormapSelect)
+        this._colormapSelect.value = preset.colormapName;
     }
     this._updateExpressionHint();
   }
@@ -2756,7 +3594,10 @@ export class OperaControl implements IControl {
    * location and show the values in a map popup. Each granule is pinned by
    * `granule_ur` so the values match exactly what Display renders.
    */
-  private async _inspectAt(lngLat: { lng: number; lat: number }): Promise<void> {
+  private async _inspectAt(lngLat: {
+    lng: number;
+    lat: number;
+  }): Promise<void> {
     const product = getProduct(this._state.product);
     const selected = this._granules.filter((g) => this._selectedIds.has(g.id));
     if (!product || selected.length === 0) {
@@ -2819,9 +3660,7 @@ export class OperaControl implements IControl {
     const rows = results.map(({ granule, point }) => {
       const name = escapeHtml(shorten(granule.id, 24));
       const value =
-        point && point.assets.length > 0
-          ? formatPointValues(point)
-          : "no data";
+        point && point.assets.length > 0 ? formatPointValues(point) : "no data";
       return `<div class="opera-inspect-row"><span class="opera-inspect-g" title="${escapeHtml(
         granule.id,
       )}">${name}</span><span class="opera-inspect-v">${escapeHtml(
@@ -3019,7 +3858,8 @@ export class OperaControl implements IControl {
     const expression = this._state.expression.trim();
     // An expression yields a computed continuous value, so class-count
     // (categorical) statistics no longer apply.
-    const categorical = !expression && isCategoricalBand(product.shortName, band);
+    const categorical =
+      !expression && isCategoricalBand(product.shortName, band);
     this._setStatsContent(
       `<div class="opera-stats-loading">Computing statistics for ${selected.length} granule(s)…</div>`,
     );
@@ -3131,7 +3971,8 @@ export class OperaControl implements IControl {
     reportBtn.type = "button";
     reportBtn.className = "plugin-control-button opera-secondary-button";
     reportBtn.textContent = "Download change report";
-    reportBtn.title = "Download a Markdown report from the latest change detection result";
+    reportBtn.title =
+      "Download a Markdown report from the latest change detection result";
     reportBtn.disabled = !this._lastChangeResult;
     reportBtn.addEventListener("click", () => this._downloadChangeReport());
     this._downloadReportBtn = reportBtn;
@@ -3184,7 +4025,11 @@ export class OperaControl implements IControl {
     this._setStatus(`Downloaded ${report.filename}.`);
   }
 
-  private _downloadTextFile(filename: string, content: string, type: string): void {
+  private _downloadTextFile(
+    filename: string,
+    content: string,
+    type: string,
+  ): void {
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -3252,9 +4097,9 @@ export class OperaControl implements IControl {
   // Read all form field values into state.
   private _readForm(): void {
     if (!this._content) return;
-    const fields = this._content.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-      "[data-field]",
-    );
+    const fields = this._content.querySelectorAll<
+      HTMLInputElement | HTMLSelectElement
+    >("[data-field]");
     fields.forEach((field) => {
       const key = field.dataset.field as keyof OperaState | undefined;
       if (!key) return;
@@ -3271,9 +4116,9 @@ export class OperaControl implements IControl {
   // Write state values back into the form inputs.
   private _syncForm(): void {
     if (!this._content) return;
-    const fields = this._content.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-      "[data-field]",
-    );
+    const fields = this._content.querySelectorAll<
+      HTMLInputElement | HTMLSelectElement
+    >("[data-field]");
     fields.forEach((field) => {
       const key = field.dataset.field as keyof OperaState | undefined;
       if (!key) return;
@@ -3323,8 +4168,10 @@ export class OperaControl implements IControl {
     | "bottom-right" {
     const parent = this._container?.parentElement;
     if (!parent) return "top-right";
-    if (parent.classList.contains("maplibregl-ctrl-top-left")) return "top-left";
-    if (parent.classList.contains("maplibregl-ctrl-top-right")) return "top-right";
+    if (parent.classList.contains("maplibregl-ctrl-top-left"))
+      return "top-left";
+    if (parent.classList.contains("maplibregl-ctrl-top-right"))
+      return "top-right";
     if (parent.classList.contains("maplibregl-ctrl-bottom-left"))
       return "bottom-left";
     if (parent.classList.contains("maplibregl-ctrl-bottom-right"))
@@ -3440,7 +4287,10 @@ function resolveProductForAgent(value: string): ReturnType<typeof getProduct> {
   );
 }
 
-function dateWindow(date: string, windowDays: number): { start: string; end: string } {
+function dateWindow(
+  date: string,
+  windowDays: number,
+): { start: string; end: string } {
   const center = parseIsoDate(date);
   const days = Math.max(Math.round(windowDays), 0);
   return {
@@ -3510,7 +4360,8 @@ function selectTimeSeriesGranules(
         .filter((granule) => !used.has(granule.id))
         .sort(
           (a, b) =>
-            Math.abs(granuleTime(a) - target) - Math.abs(granuleTime(b) - target),
+            Math.abs(granuleTime(a) - target) -
+            Math.abs(granuleTime(b) - target),
         )[0];
       if (nearest) {
         picked.push(nearest);
@@ -3533,7 +4384,9 @@ function selectTimeSeriesGranules(
   return result;
 }
 
-function uniqueGranules(granules: Array<OperaGranule | undefined>): OperaGranule[] {
+function uniqueGranules(
+  granules: Array<OperaGranule | undefined>,
+): OperaGranule[] {
   const seen = new Set<string>();
   const result: OperaGranule[] = [];
   for (const granule of granules) {
@@ -3544,7 +4397,10 @@ function uniqueGranules(granules: Array<OperaGranule | undefined>): OperaGranule
   return result;
 }
 
-function displayedLayerIdsForGranule(granuleId: string, layerIds: string[]): string[] {
+function displayedLayerIdsForGranule(
+  granuleId: string,
+  layerIds: string[],
+): string[] {
   const token = slug(granuleId);
   return layerIds.filter((id) => id.includes(token));
 }
@@ -3621,8 +4477,7 @@ function continuousStatisticsSummary(
     count: stats.count,
     validPixels: stats.validPixels ?? null,
     validPercent: stats.validPercent ?? null,
-    validKm2:
-      stats.validPixels != null ? pixelsToKm2(stats.validPixels) : null,
+    validKm2: stats.validPixels != null ? pixelsToKm2(stats.validPixels) : null,
     percentile2: stats.percentile2 ?? null,
     percentile98: stats.percentile98 ?? null,
   };
@@ -3693,7 +4548,9 @@ function changeReportFilename(
   result: OperaAgentChangeResult,
   format: "markdown" | "json",
 ): string {
-  const before = safeDateToken(result.before?.date ?? result.before?.granuleDate);
+  const before = safeDateToken(
+    result.before?.date ?? result.before?.granuleDate,
+  );
   const after = safeDateToken(result.after?.date ?? result.after?.granuleDate);
   const ext = format === "json" ? "json" : "md";
   return `opera-change-${slug(result.product)}-${slug(result.band)}-${before}-to-${after}.${ext}`;
@@ -3739,7 +4596,8 @@ function observationReportLines(
 function metricReportLines(
   values?: Record<string, number | string | null>,
 ): string[] {
-  if (!values || Object.keys(values).length === 0) return ["No metrics recorded."];
+  if (!values || Object.keys(values).length === 0)
+    return ["No metrics recorded."];
   return Object.entries(values).map(([key, value]) => {
     const text =
       typeof value === "number" && Number.isFinite(value)
@@ -3988,7 +4846,9 @@ function renderWaterStats(s: BandStatistics): string {
   // Percentages are of valid (non-fill) pixels; keep each one on the line it
   // describes so the open-water fraction is never mistaken for open+partial.
   const pct = (px: number) =>
-    validCount > 0 ? ` (${((px / validCount) * 100).toFixed(1)}% of valid)` : "";
+    validCount > 0
+      ? ` (${((px / validCount) * 100).toFixed(1)}% of valid)`
+      : "";
   const openLine = `Open water: <b>${formatArea(
     pixelsToKm2(openCount),
   )} km²</b>${pct(openCount)}`;
@@ -4018,7 +4878,9 @@ function formatPointValues(point: PointResult): string {
       // Only prefix with the band name when there is more than one value, so a
       // single-band read stays terse.
       const single = point.assets.length === 1 && asset.values.length === 1;
-      parts.push(single ? text : `${asset.bandNames[i] ?? `b${i + 1}`}=${text}`);
+      parts.push(
+        single ? text : `${asset.bandNames[i] ?? `b${i + 1}`}=${text}`,
+      );
     });
   }
   return parts.length > 0 ? parts.join(", ") : "no data";

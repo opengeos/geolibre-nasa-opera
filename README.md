@@ -175,6 +175,17 @@ The NASA OPERA plugin registers OPERA-specific agent tools:
   or GeoJSON geometry.
 - `titiler_cmr_timeseries_tilejson` — request time-indexed TileJSON responses
   for temporal rasterio/xarray workflows.
+- `map_disaster_context` maps the existing GeoLibre Overture building and
+  transportation layers plus WorldPop population for any disaster AOI.
+- `sentinel2_event_imagery` searches the public Microsoft Planetary Computer
+  STAC API and adds the least-cloudy Sentinel-2 L2A true-color scene for the
+  event window.
+- `derive_flood_benchmark` derives and locks observed flood water from OPERA
+  DSWx when a QAed flood extent is not available.
+- `overture_in_flood` counts flooded Overture buildings, clips Overture
+  transportation centerlines to the flood extent, and adds styled impact layers.
+- `population_in_flood` calculates WorldPop modeled residential population
+  within the flood extent and adds a styled 100 m population layer.
 
 Example prompts:
 
@@ -204,6 +215,12 @@ water_class, group /science/grids, sel time=2024-02-01T00:00:00Z, then add it
 to the map.
 ```
 
+```text
+Map the October 2024 flood in Valencia Region, Spain. Use OPERA DSWx to derive
+the flood extent, then analyze Overture buildings and transportation plus
+WorldPop population exposure. Add all results to the map with clear styling.
+```
+
 This is a browser-side agent: provider SDKs run in the browser and send prompts
 directly to the selected model provider. Use it in trusted local or internal
 GeoLibre deployments, or place a backend proxy in front of provider credentials
@@ -230,11 +247,20 @@ bundled and the panel falls back to manual key entry.
 > Use this only for controlled/sponsor demo deployments. For public deployments,
 > leave it unset and put the key behind a server-side proxy.
 
-## Constrained flood one-pager workflow
+## Disaster impact mapping and flood one-pager
 
-A supervised, human-in-the-loop workflow that turns a human-QAed flood map into a
-shareable one-pager, designed so the agent cannot hallucinate the authoritative
-map or uncited impact numbers:
+For any mapped disaster AOI, `map_disaster_context` activates GeoLibre's existing
+Overture Maps building and transportation layers and adds open-access WorldPop
+population context. The agent first displays the relevant OPERA product, such as
+DSWx for floods, DISP-S1 for displacement, or DIST for surface disturbance.
+It also calls `sentinel2_event_imagery` to add open Sentinel-2 true-color context
+from Microsoft Planetary Computer. Contextual assets and optical imagery are not
+labeled as impacted unless a hazard extent or a separate change analysis is
+available.
+
+Floods support a complete exposure workflow because OPERA DSWx can provide a
+polygonal observed-water extent. A supervised workflow turns that extent, or a
+human-QAed flood map, into interactive analysis layers and a shareable one-pager:
 
 1. **Get a flood extent** one of two ways:
    - **Just space + time (auto).** Ask the agent for a one-pager for a place and a
@@ -250,8 +276,20 @@ map or uncited impact numbers:
      [`examples/sample-benchmark-valencia.geojson`](examples/sample-benchmark-valencia.geojson).
      When a QAed benchmark is locked, the agent uses it instead of deriving one.
 2. **Ask the agent.** With a benchmark locked, the GeoAgent is constrained to it:
-   - `buildings_in_flood` intersects the benchmark with OSM building footprints
-     (via the public Overpass API — no proxy needed) to quantify exposure.
+   - `overture_in_flood` uses GeoLibre's bounded Overture PMTiles query to count
+     flooded buildings, calculate building footprint area, and clip
+     transportation centerlines to the flood polygon. It also activates the
+     existing Overture Maps plugin for context and adds separate styled,
+     interactive impact layers.
+   - `population_in_flood` uses the public WorldPop statistics API to calculate
+     modeled residential population within the flood extent and adds a styled
+     WorldPop 100 m population image. This figure is population exposure, not
+     deaths, evacuations, or displacement.
+   - `sentinel2_event_imagery` selects the least-cloudy Sentinel-2 L2A scene in
+     the event window and adds its public true-color TileJSON layer. If no scene
+     meets the cloud threshold, the workflow reports the limitation.
+   - `buildings_in_flood` remains available as an OSM Overpass fallback when the
+     GeoLibre host does not expose Overture queries.
    - `news_impact_search` returns quantified impact figures **with source URLs +
      dates**; the agent is instructed to report only citable numbers. It defaults
      to a retrospective `general` search so events older than a few days remain
@@ -262,10 +300,15 @@ map or uncited impact numbers:
      `water_only=true` — open water + partial surface water stay visible while
      cloud/ocean/no-data become transparent, so stacked post-event scenes don't
      bury the map under grey cloud.
-   - `build_one_pager` assembles a self-contained HTML one-pager (map snapshot
-     with the DSWx layer, flooded buildings, and benchmark outline + legend/scale
-     bar + building exposure + cited impacts + narrative) and downloads it. It is
+   - `build_one_pager` assembles a self-contained HTML one-pager with the map
+     snapshot, benchmark, Overture building and transportation exposure,
+     WorldPop population exposure, cited impacts, and narrative. It is
      print/PDF-ready and screenshots cleanly for social.
+
+Overture analysis requires a GeoLibre host that provides `activatePlugin` and
+`queryOvertureFeatures`. Queries are bounded by tile and feature limits. The
+agent returns an error instead of reporting partial exposure when a result is
+truncated.
 
 ### News search proxy (Tavily)
 

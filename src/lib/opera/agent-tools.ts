@@ -15,6 +15,14 @@ import {
 
 export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available for searching and visualizing OPERA satellite products.
 
+Mandatory disaster-request routing:
+- A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster MUST use the OPERA disaster tools. Navigating the map or adding a basemap is preparation, not completion. Do not give a final answer until at least one OPERA disaster tool has run, or until a tool returns a concrete error that you report.
+- Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. Open-access Sentinel-2 event imagery must come from sentinel2_event_imagery, not a generic satellite basemap.
+- After navigating to a named place, continue with the current map extent as the AOI. For every disaster type, call map_disaster_context so Overture buildings, transportation, and WorldPop population are added even when quantified exposure is not yet possible.
+- If dates are omitted but the hazard and place clearly identify a well-known historical event, use the event's established date window and state that assumption. Do not stop to request confirmation merely because dates were omitted. For example, "Flood in Valencia Region, Spain" refers to the late-October 2024 DANA flood; use 2024-10-27 through 2024-11-05 unless the user specifies another event.
+- If the event remains genuinely ambiguous, call map_disaster_context first, explain that those layers are contextual, then ask for the missing date or event identifier. Never claim that a disaster was mapped after only add_basemap or zoom_to_bounds.
+- For a flood with an event window, run derive_flood_benchmark, then overture_in_flood and population_in_flood after the benchmark succeeds, and sentinel2_event_imagery for optical context. Also call map_disaster_context before or during this workflow so baseline exposure layers are present.
+
 Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surface water, SAR backscatter, or disturbance data.
 - Prefer search_and_display_opera when the user asks to find/show/display OPERA data in one request.
 - Use detect_opera_change_between_dates when the user asks to compare two dates, detect change, or create before/after OPERA layers.
@@ -32,28 +40,41 @@ Advanced titiler-cmr tools are also available for backend-aware analysis beyond 
 - Use titiler_cmr_statistics for AOI statistics over bbox or GeoJSON.
 - Use titiler_cmr_timeseries_tilejson for time-indexed TileJSON responses.
 
-Constrained flood one-pager workflow. Two ways to get the flood extent:
+Disaster mapping workflow:
+- Identify the hazard, place, and event dates before selecting data. Use OPERA DSWx for floods, OPERA DISP-S1 for displacement associated with earthquakes, volcanic unrest, and landslides, and OPERA DIST for surface disturbance context.
+- Only call assets or people "impacted" when a hazard extent is available. Overture and population layers without a hazard intersection are context layers, not measured impacts.
+- Call sentinel2_event_imagery with the event AOI and date window to add low-cloud, open-access Sentinel-2 true-color context from Microsoft Planetary Computer. Treat optical imagery as visual context unless a separate analysis quantifies change.
+- For non-flood disasters, call map_disaster_context after displaying the relevant OPERA product. It activates GeoLibre's Overture building and transportation layers and adds WorldPop context for the event AOI.
+- The complete automated exposure workflow below is available for floods because OPERA DSWx supplies a polygonal observed-water extent. For other hazards, display the relevant OPERA product and map contextual Overture/population data, but explain that quantified exposure requires an authoritative hazard polygon.
+
+Flood impact mapping and one-pager workflow. Two ways to get the flood extent:
 - If the user gives a place/AOI + a date range but NO benchmark is locked, call derive_flood_benchmark(bbox, start, end, event_name?, place?) first. It searches OPERA DSWx-HLS, renders the observed open/partial surface water on the map, vectorizes it, and locks it as an OPERA-DERIVED benchmark. If the user gives a place name but no bbox, navigate/zoom the map to the place first (MapLibre tools) so the current extent is the AOI, or pass a bbox. This is the "just space + time" path.
 - If a human-QAed benchmark is already locked (check get_opera_context or get_benchmark), it is the AUTHORITATIVE ground truth; prefer it over deriving one.
 When a benchmark is locked (either kind), follow these rules strictly:
 - Treat the locked benchmark water polygon as ground truth. Never recompute, redraw, or override a human-QAed benchmark. A benchmark derived by derive_flood_benchmark is OPERA-observed (not human-QAed); describe it as such in the one-pager and do not present it as validated ground truth.
 - Operate only within the benchmark bbox. Frame every spatial answer relative to the flooded area it defines.
-- To quantify building exposure, call buildings_in_flood (it intersects the benchmark with OSM buildings and, by default, draws the flooded buildings on the map so they appear in the one-pager snapshot). Never invent building counts; report only the numbers the tool returns. Call it before build_one_pager so the buildings layer is on the map.
+- Call overture_in_flood to activate GeoLibre's existing Overture Maps plugin, show styled building/transportation context, calculate flooded building counts, clip transportation to the flood extent, and add interactive impact layers. Never invent counts or lengths; report only the tool result. If the host lacks Overture query support, use buildings_in_flood as the OSM fallback.
+- Call population_in_flood to calculate WorldPop modeled residential population within the flood extent and add a styled 100 m population layer. Describe the result as modeled population exposure, never as deaths, evacuations, or displacement.
+- Call sentinel2_event_imagery for the flood event window before the final map snapshot. If no suitably low-cloud scene is available, report that limitation rather than substituting an unrelated date.
 - To gather event impacts, call news_impact_search and report ONLY figures you can attribute to a returned source_url, always with publisher and date. If a figure has no citable source, omit it.
 - To show the OPERA-observed flood on the one-pager map, display DSWx (product OPERA_L3_DSWX-HLS_V1, band B01_WTR) for the event dates with water_only=true before calling build_one_pager. water_only hides cloud/ocean/no-data so stacked post-event scenes stay legible; the benchmark remains the authoritative extent.
-- To produce the shareable one-pager, call build_one_pager, passing the buildings result and the cited impacts. Pass buildings/impacts exactly as measured; do not fabricate.
+- To produce the shareable one-pager, call build_one_pager after the map layers are ready, passing the Overture buildings/transportation results, WorldPop result, and cited impacts. Pass all measurements exactly as returned; do not fabricate.
 - If the user asks for flood analysis but no benchmark is locked: derive one from OPERA DSWx with derive_flood_benchmark when they gave a place + dates, or tell them to import and lock a QAed benchmark GeoJSON in the OPERA panel's Benchmark section for an authoritative extent.`;
 
 const bboxSchema = z
   .union([z.array(z.number()).length(4), z.string()])
   .optional()
-  .describe("Bounding box as [west,south,east,north] or 'west,south,east,north'. Omit to use current map extent.");
+  .describe(
+    "Bounding box as [west,south,east,north] or 'west,south,east,north'. Omit to use current map extent.",
+  );
 
 const searchSchema = z.object({
   product: z
     .string()
     .optional()
-    .describe("OPERA product short_name or label, e.g. OPERA_L3_DSWX-HLS_V1, DSWX-HLS, RTC-S1."),
+    .describe(
+      "OPERA product short_name or label, e.g. OPERA_L3_DSWX-HLS_V1, DSWX-HLS, RTC-S1.",
+    ),
   bbox: bboxSchema,
   start: z.string().optional().describe("Inclusive start date, YYYY-MM-DD."),
   end: z.string().optional().describe("Inclusive end date, YYYY-MM-DD."),
@@ -64,7 +85,9 @@ const displaySchema = z.object({
   granule_ids: z
     .array(z.string())
     .optional()
-    .describe("Granule ids from search_opera_granules. Omit to display the first result(s)."),
+    .describe(
+      "Granule ids from search_opera_granules. Omit to display the first result(s).",
+    ),
   max_granules: z
     .number()
     .int()
@@ -72,10 +95,22 @@ const displaySchema = z.object({
     .max(25)
     .optional()
     .describe("Max granules to display when granule_ids is omitted."),
-  band: z.string().optional().describe("Band/layer token, e.g. B01_WTR, VV, VH, B10_DEM."),
-  rescale: z.string().optional().describe("Optional render stretch such as '0,3000'."),
-  colormap_name: z.string().optional().describe("Optional titiler named colormap, e.g. terrain, gray, blues."),
-  expression: z.string().optional().describe("Optional rio-tiler expression; selected band is b1."),
+  band: z
+    .string()
+    .optional()
+    .describe("Band/layer token, e.g. B01_WTR, VV, VH, B10_DEM."),
+  rescale: z
+    .string()
+    .optional()
+    .describe("Optional render stretch such as '0,3000'."),
+  colormap_name: z
+    .string()
+    .optional()
+    .describe("Optional titiler named colormap, e.g. terrain, gray, blues."),
+  expression: z
+    .string()
+    .optional()
+    .describe("Optional rio-tiler expression; selected band is b1."),
   water_only: z
     .boolean()
     .optional()
@@ -90,7 +125,9 @@ const changeDetectionSchema = z.object({
   product: z
     .string()
     .optional()
-    .describe("OPERA product short_name or label, e.g. OPERA_L3_DSWX-HLS_V1, DSWX-HLS, RTC-S1."),
+    .describe(
+      "OPERA product short_name or label, e.g. OPERA_L3_DSWX-HLS_V1, DSWX-HLS, RTC-S1.",
+    ),
   bbox: bboxSchema,
   before_date: z.string().describe("Baseline date, YYYY-MM-DD."),
   after_date: z.string().describe("Comparison date, YYYY-MM-DD."),
@@ -100,38 +137,80 @@ const changeDetectionSchema = z.object({
     .min(0)
     .max(90)
     .optional()
-    .describe("Days on each side of each date to search for the nearest granule. Defaults to 7."),
-  band: z.string().optional().describe("Band/layer token, e.g. B01_WTR, VV, VH."),
-  rescale: z.string().optional().describe("Optional render stretch such as '0,3000'."),
-  colormap_name: z.string().optional().describe("Optional titiler named colormap, e.g. gray, blues."),
-  expression: z.string().optional().describe("Optional rio-tiler expression; selected band is b1."),
+    .describe(
+      "Days on each side of each date to search for the nearest granule. Defaults to 7.",
+    ),
+  band: z
+    .string()
+    .optional()
+    .describe("Band/layer token, e.g. B01_WTR, VV, VH."),
+  rescale: z
+    .string()
+    .optional()
+    .describe("Optional render stretch such as '0,3000'."),
+  colormap_name: z
+    .string()
+    .optional()
+    .describe("Optional titiler named colormap, e.g. gray, blues."),
+  expression: z
+    .string()
+    .optional()
+    .describe("Optional rio-tiler expression; selected band is b1."),
 });
 
 const timeSeriesSchema = z.object({
   product: z
     .string()
     .optional()
-    .describe("OPERA product short_name or label, e.g. OPERA_L3_DSWX-HLS_V1, DSWX-HLS, RTC-S1."),
+    .describe(
+      "OPERA product short_name or label, e.g. OPERA_L3_DSWX-HLS_V1, DSWX-HLS, RTC-S1.",
+    ),
   bbox: bboxSchema,
   start: z.string().describe("Inclusive start date, YYYY-MM-DD."),
   end: z.string().describe("Inclusive end date, YYYY-MM-DD."),
-  count: z.number().int().min(1).max(100).optional().describe("Max observations to analyze. Defaults to 12."),
+  count: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Max observations to analyze. Defaults to 12."),
   interval_days: z
     .number()
     .int()
     .min(1)
     .max(365)
     .optional()
-    .describe("Optional sampling interval in days. The closest granule per interval is used."),
-  band: z.string().optional().describe("Band/layer token, e.g. B01_WTR, VV, VH."),
-  rescale: z.string().optional().describe("Optional render stretch such as '0,3000'."),
-  colormap_name: z.string().optional().describe("Optional titiler named colormap, e.g. gray, blues."),
-  expression: z.string().optional().describe("Optional rio-tiler expression; selected band is b1."),
-  display_endpoints: z.boolean().optional().describe("Display the first and last observations as map layers."),
+    .describe(
+      "Optional sampling interval in days. The closest granule per interval is used.",
+    ),
+  band: z
+    .string()
+    .optional()
+    .describe("Band/layer token, e.g. B01_WTR, VV, VH."),
+  rescale: z
+    .string()
+    .optional()
+    .describe("Optional render stretch such as '0,3000'."),
+  colormap_name: z
+    .string()
+    .optional()
+    .describe("Optional titiler named colormap, e.g. gray, blues."),
+  expression: z
+    .string()
+    .optional()
+    .describe("Optional rio-tiler expression; selected band is b1."),
+  display_endpoints: z
+    .boolean()
+    .optional()
+    .describe("Display the first and last observations as map layers."),
 });
 
 const changeReportSchema = z.object({
-  format: z.enum(["markdown", "json"]).optional().describe("Report format. Defaults to markdown."),
+  format: z
+    .enum(["markdown", "json"])
+    .optional()
+    .describe("Report format. Defaults to markdown."),
 });
 
 const backendSchema = z.enum(["rasterio", "xarray"]);
@@ -143,28 +222,61 @@ const queryValueSchema = z.union([
 ]);
 
 const titilerCommonSchema = z.object({
-  backend: backendSchema.describe("titiler-cmr backend: rasterio for COG/GeoTIFF, xarray for NetCDF/HDF5/Zarr."),
-  collection_concept_id: z.string().describe("CMR collection concept id, e.g. C2021957657-LPCLOUD."),
-  endpoint: z.string().optional().describe("titiler-cmr endpoint. Omit to use the OPERA panel endpoint."),
-  granule_ur: z.string().optional().describe("Exact CMR GranuleUR to pin the request."),
-  temporal: z.string().optional().describe("Temporal filter as RFC3339 instant/range, e.g. 2024-02-01T00:00:00Z/2024-03-01T00:00:00Z."),
-  assets: z.array(z.string()).optional().describe("Rasterio asset names, repeated as assets=."),
+  backend: backendSchema.describe(
+    "titiler-cmr backend: rasterio for COG/GeoTIFF, xarray for NetCDF/HDF5/Zarr.",
+  ),
+  collection_concept_id: z
+    .string()
+    .describe("CMR collection concept id, e.g. C2021957657-LPCLOUD."),
+  endpoint: z
+    .string()
+    .optional()
+    .describe("titiler-cmr endpoint. Omit to use the OPERA panel endpoint."),
+  granule_ur: z
+    .string()
+    .optional()
+    .describe("Exact CMR GranuleUR to pin the request."),
+  temporal: z
+    .string()
+    .optional()
+    .describe(
+      "Temporal filter as RFC3339 instant/range, e.g. 2024-02-01T00:00:00Z/2024-03-01T00:00:00Z.",
+    ),
+  assets: z
+    .array(z.string())
+    .optional()
+    .describe("Rasterio asset names, repeated as assets=."),
   assets_regex: z.string().optional().describe("Rasterio asset regex."),
-  variables: z.array(z.string()).optional().describe("Xarray variable names, repeated as variables=."),
+  variables: z
+    .array(z.string())
+    .optional()
+    .describe("Xarray variable names, repeated as variables=."),
   group: z.string().optional().describe("Xarray group path."),
-  sel: z.union([z.string(), z.record(z.string(), z.unknown())]).optional().describe("Xarray dimension selector, object or JSON string."),
-  rescale: z.union([z.string(), z.array(z.string())]).optional().describe("One or more rescale values, e.g. '0,1'."),
+  sel: z
+    .union([z.string(), z.record(z.string(), z.unknown())])
+    .optional()
+    .describe("Xarray dimension selector, object or JSON string."),
+  rescale: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .describe("One or more rescale values, e.g. '0,1'."),
   colormap_name: z.string().optional(),
   colormap: z.string().optional().describe("Explicit titiler colormap JSON."),
   expression: z.string().optional().describe("Expression using b1, b2, ..."),
   minzoom: z.number().int().optional(),
   maxzoom: z.number().int().optional(),
-  extra_params: z.record(z.string(), queryValueSchema).optional().describe("Extra titiler-cmr query parameters passed through as-is."),
+  extra_params: z
+    .record(z.string(), queryValueSchema)
+    .optional()
+    .describe("Extra titiler-cmr query parameters passed through as-is."),
 });
 
 const titilerTileJsonSchema = titilerCommonSchema.extend({
   name: z.string().optional().describe("Layer name when add_to_map is true."),
-  add_to_map: z.boolean().optional().describe("Register the returned TileJSON as a map raster layer."),
+  add_to_map: z
+    .boolean()
+    .optional()
+    .describe("Register the returned TileJSON as a map raster layer."),
   opacity: z.number().min(0).max(1).optional(),
   fit_bounds: z.boolean().optional(),
 });
@@ -180,66 +292,167 @@ const titilerStatisticsSchema = titilerCommonSchema.extend({
     .length(4)
     .optional()
     .describe("AOI bbox [west,south,east,north]. Omit if geojson is provided."),
-  geojson: z.unknown().optional().describe("AOI GeoJSON Feature or FeatureCollection."),
+  geojson: z
+    .unknown()
+    .optional()
+    .describe("AOI GeoJSON Feature or FeatureCollection."),
   categorical: z.boolean().optional(),
   histogram_bins: z.number().int().min(1).optional(),
 });
 
 const titilerTimeseriesSchema = titilerTileJsonSchema.extend({
-  step: z.string().optional().describe("ISO-8601 duration step, e.g. P1D, P1W, P1M."),
+  step: z
+    .string()
+    .optional()
+    .describe("ISO-8601 duration step, e.g. P1D, P1W, P1M."),
   temporal_mode: z.enum(["point", "interval"]).optional(),
-  add_first_to_map: z.boolean().optional().describe("Register the first returned timeseries TileJSON as a map layer."),
+  add_first_to_map: z
+    .boolean()
+    .optional()
+    .describe(
+      "Register the first returned timeseries TileJSON as a map layer.",
+    ),
 });
 
 const deriveFloodBenchmarkSchema = z.object({
   bbox: bboxSchema,
-  start: z.string().describe("Inclusive start date, YYYY-MM-DD (event window start)."),
-  end: z.string().describe("Inclusive end date, YYYY-MM-DD (event window end)."),
+  start: z
+    .string()
+    .describe("Inclusive start date, YYYY-MM-DD (event window start)."),
+  end: z
+    .string()
+    .describe("Inclusive end date, YYYY-MM-DD (event window end)."),
   event_name: z
     .string()
     .optional()
-    .describe("Event name for the derived benchmark, e.g. 'Valencia DANA flooding'."),
-  place: z.string().optional().describe("Human place label for the one-pager subtitle."),
+    .describe(
+      "Event name for the derived benchmark, e.g. 'Valencia DANA flooding'.",
+    ),
+  place: z
+    .string()
+    .optional()
+    .describe("Human place label for the one-pager subtitle."),
   max_granules: z
     .number()
     .int()
     .min(1)
     .max(12)
     .optional()
-    .describe("Max DSWx granules to mosaic for the observed-water extent (default 6)."),
+    .describe(
+      "Max DSWx granules to mosaic for the observed-water extent (default 6).",
+    ),
 });
 
 const buildingsInFloodSchema = z.object({
   building_source: z
     .enum(["osm"])
     .optional()
-    .describe("Ancillary building source. Only 'osm' (OSM/Overpass) is supported."),
+    .describe(
+      "Ancillary building source. Only 'osm' (OSM/Overpass) is supported.",
+    ),
   add_layer: z
     .boolean()
     .optional()
-    .describe("Draw the flooded buildings as a map layer (default true; pass false to skip)."),
-  compute_area: z.boolean().optional().describe("Also sum flooded building footprint area (km²)."),
+    .describe(
+      "Draw the flooded buildings as a map layer (default true; pass false to skip).",
+    ),
+  compute_area: z
+    .boolean()
+    .optional()
+    .describe("Also sum flooded building footprint area (km²)."),
+});
+
+const disasterContextSchema = z.object({
+  hazard: z
+    .string()
+    .describe(
+      "Disaster type, e.g. flood, earthquake, volcanic eruption, or landslide.",
+    ),
+  event_name: z.string().optional().describe("Human event/AOI label."),
+  bbox: bboxSchema,
+  population_year: z
+    .number()
+    .int()
+    .min(2000)
+    .max(2020)
+    .optional()
+    .describe("WorldPop data year (default and latest available: 2020)."),
+  add_population_layer: z.boolean().optional(),
+});
+
+const sentinel2ImagerySchema = z.object({
+  bbox: bboxSchema,
+  start: z.string().describe("Inclusive imagery search start, YYYY-MM-DD."),
+  end: z.string().describe("Inclusive imagery search end, YYYY-MM-DD."),
+  max_cloud_cover: z
+    .number()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe("Maximum scene cloud cover percentage (default 30)."),
+  opacity: z.number().min(0).max(1).optional(),
+});
+
+const overtureInFloodSchema = z.object({
+  add_layers: z
+    .boolean()
+    .optional()
+    .describe(
+      "Add styled flooded-building and impacted-transportation layers (default true).",
+    ),
+  compute_building_area: z
+    .boolean()
+    .optional()
+    .describe("Also sum flooded building footprint area (km²)."),
+  max_tiles: z.number().int().min(1).max(1024).optional(),
+  max_features: z.number().int().min(1).max(250_000).optional(),
+});
+
+const populationInFloodSchema = z.object({
+  year: z
+    .number()
+    .int()
+    .min(2000)
+    .max(2020)
+    .optional()
+    .describe("WorldPop data year (default and latest available: 2020)."),
+  add_layer: z
+    .boolean()
+    .optional()
+    .describe("Add the styled WorldPop 100 m population layer (default true)."),
 });
 
 const newsImpactSchema = z.object({
   query: z
     .string()
-    .describe("News search query, e.g. 'Valencia flood October 2024 deaths damages displaced'."),
+    .describe(
+      "News search query, e.g. 'Valencia flood October 2024 deaths damages displaced'.",
+    ),
   max_results: z.number().int().min(1).max(20).optional(),
 });
 
 const impactSchema = z.object({
-  claim: z.string().describe("What the figure measures, e.g. 'Fatalities', 'Economic loss'."),
+  claim: z
+    .string()
+    .describe("What the figure measures, e.g. 'Fatalities', 'Economic loss'."),
   value: z.string().describe("The figure as text, e.g. '224', '$4.2B'."),
-  source_url: z.string().describe("Article URL the figure is cited from (required)."),
+  source_url: z
+    .string()
+    .describe("Article URL the figure is cited from (required)."),
   publisher: z.string().optional(),
   date: z.string().optional(),
 });
 
 const onePagerSchema = z.object({
   title: z.string().optional(),
-  narrative: z.string().optional().describe("Background paragraph describing the event."),
-  impacts: z.array(impactSchema).optional().describe("Cited impact figures. Every entry needs a source_url."),
+  narrative: z
+    .string()
+    .optional()
+    .describe("Background paragraph describing the event."),
+  impacts: z
+    .array(impactSchema)
+    .optional()
+    .describe("Cited impact figures. Every entry needs a source_url."),
   buildings: z
     .object({
       flooded_count: z.number(),
@@ -249,17 +462,42 @@ const onePagerSchema = z.object({
       source: z.string().optional(),
     })
     .optional()
-    .describe("Building-exposure result from buildings_in_flood."),
+    .describe(
+      "Building-exposure result from overture_in_flood or buildings_in_flood.",
+    ),
+  population: z
+    .object({
+      total_population: z.number(),
+      year: z.number().int(),
+      source: z.string().optional(),
+    })
+    .optional()
+    .describe("Population-exposure result from population_in_flood."),
+  transportation: z
+    .object({
+      impacted_segment_count: z.number().int(),
+      impacted_length_km: z.number(),
+      source: z.string().optional(),
+    })
+    .optional()
+    .describe("Transportation-exposure result from overture_in_flood."),
   map_snapshot_data_url: z
     .string()
     .optional()
-    .describe("Optional map PNG data URL. Omit to let the plugin capture the current map."),
-  download: z.boolean().optional().describe("Download the HTML (default true)."),
+    .describe(
+      "Optional map PNG data URL. Omit to let the plugin capture the current map.",
+    ),
+  download: z
+    .boolean()
+    .optional()
+    .describe("Download the HTML (default true)."),
 });
 
 type TitilerCommonInput = z.infer<typeof titilerCommonSchema>;
 
-export function createOperaAgentTools(getControl: () => OperaControl | null): Tool[] {
+export function createOperaAgentTools(
+  getControl: () => OperaControl | null,
+): Tool[] {
   const controlOrThrow = (): OperaControl => {
     const control = getControl();
     if (!control) {
@@ -282,13 +520,15 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
         "Search NASA CMR for OPERA granules. Results also populate the OPERA panel and add footprint layers to the map.",
       inputSchema: searchSchema,
       callback: async (input) =>
-        toJsonValue(await controlOrThrow().searchForAgent({
-          product: input.product,
-          bbox: input.bbox as BBox | string | undefined,
-          start: input.start,
-          end: input.end,
-          count: input.count,
-        })),
+        toJsonValue(
+          await controlOrThrow().searchForAgent({
+            product: input.product,
+            bbox: input.bbox as BBox | string | undefined,
+            start: input.start,
+            end: input.end,
+            count: input.count,
+          }),
+        ),
     }),
     tool({
       name: "display_opera_granules",
@@ -296,15 +536,17 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
         "Display selected OPERA granules from the latest search as titiler-cmr raster layers on the map.",
       inputSchema: displaySchema,
       callback: async (input) =>
-        toJsonValue(await controlOrThrow().displayForAgent({
-          granuleIds: input.granule_ids,
-          maxGranules: input.max_granules,
-          band: input.band,
-          rescale: input.rescale,
-          colormapName: input.colormap_name,
-          expression: input.expression,
-          waterOnly: input.water_only,
-        })),
+        toJsonValue(
+          await controlOrThrow().displayForAgent({
+            granuleIds: input.granule_ids,
+            maxGranules: input.max_granules,
+            band: input.band,
+            rescale: input.rescale,
+            colormapName: input.colormap_name,
+            expression: input.expression,
+            waterOnly: input.water_only,
+          }),
+        ),
     }),
     tool({
       name: "search_and_display_opera",
@@ -341,17 +583,19 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
         "Find the closest OPERA granules around two dates, display before/after layers, and compute AOI change statistics.",
       inputSchema: changeDetectionSchema,
       callback: async (input) =>
-        toJsonValue(await controlOrThrow().detectChangeForAgent({
-          product: input.product,
-          bbox: input.bbox as BBox | string | undefined,
-          beforeDate: input.before_date,
-          afterDate: input.after_date,
-          windowDays: input.window_days,
-          band: input.band,
-          rescale: input.rescale,
-          colormapName: input.colormap_name,
-          expression: input.expression,
-        })),
+        toJsonValue(
+          await controlOrThrow().detectChangeForAgent({
+            product: input.product,
+            bbox: input.bbox as BBox | string | undefined,
+            beforeDate: input.before_date,
+            afterDate: input.after_date,
+            windowDays: input.window_days,
+            band: input.band,
+            rescale: input.rescale,
+            colormapName: input.colormap_name,
+            expression: input.expression,
+          }),
+        ),
     }),
     tool({
       name: "analyze_opera_time_series",
@@ -359,19 +603,21 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
         "Analyze AOI statistics across OPERA granules over a date range and return first-to-last trend metrics. Can display first/last layers.",
       inputSchema: timeSeriesSchema,
       callback: async (input) =>
-        toJsonValue(await controlOrThrow().analyzeTimeSeriesForAgent({
-          product: input.product,
-          bbox: input.bbox as BBox | string | undefined,
-          start: input.start,
-          end: input.end,
-          count: input.count,
-          intervalDays: input.interval_days,
-          band: input.band,
-          rescale: input.rescale,
-          colormapName: input.colormap_name,
-          expression: input.expression,
-          displayEndpoints: input.display_endpoints,
-        })),
+        toJsonValue(
+          await controlOrThrow().analyzeTimeSeriesForAgent({
+            product: input.product,
+            bbox: input.bbox as BBox | string | undefined,
+            start: input.start,
+            end: input.end,
+            count: input.count,
+            intervalDays: input.interval_days,
+            band: input.band,
+            rescale: input.rescale,
+            colormapName: input.colormap_name,
+            expression: input.expression,
+            displayEndpoints: input.display_endpoints,
+          }),
+        ),
     }),
     tool({
       name: "export_opera_change_report",
@@ -379,9 +625,11 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
         "Return a Markdown or JSON report for the latest OPERA change detection result.",
       inputSchema: changeReportSchema,
       callback: (input) =>
-        toJsonValue(controlOrThrow().exportChangeReportForAgent({
-          format: input.format,
-        })),
+        toJsonValue(
+          controlOrThrow().exportChangeReportForAgent({
+            format: input.format,
+          }),
+        ),
     }),
     tool({
       name: "titiler_cmr_tilejson",
@@ -444,9 +692,12 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
       inputSchema: titilerStatisticsSchema,
       callback: async (input) => {
         const control = controlOrThrow();
-        const feature = input.geojson ?? (input.bbox ? bboxFeature(input.bbox) : null);
+        const feature =
+          input.geojson ?? (input.bbox ? bboxFeature(input.bbox) : null);
         if (!feature) {
-          throw new Error("Provide bbox or geojson for titiler_cmr_statistics.");
+          throw new Error(
+            "Provide bbox or geojson for titiler_cmr_statistics.",
+          );
         }
         const url = buildCmrStatisticsUrl({
           ...commonParams(control, input),
@@ -508,6 +759,38 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
       },
     }),
     tool({
+      name: "map_disaster_context",
+      description:
+        "Map Overture buildings and transportation plus WorldPop population for any disaster AOI. These are contextual layers, not measured impacts, until a hazard extent is available. Use after displaying the relevant OPERA hazard product for non-flood disasters.",
+      inputSchema: disasterContextSchema,
+      callback: async (input) =>
+        toJsonValue(
+          await controlOrThrow().mapDisasterContextForAgent({
+            hazard: input.hazard,
+            eventName: input.event_name,
+            bbox: input.bbox as BBox | string | undefined,
+            populationYear: input.population_year,
+            addPopulationLayer: input.add_population_layer,
+          }),
+        ),
+    }),
+    tool({
+      name: "sentinel2_event_imagery",
+      description:
+        "Search the public Microsoft Planetary Computer STAC API for the least-cloudy Sentinel-2 L2A scene in a disaster event window, then add its open-access true-color tiles as an interactive raster layer.",
+      inputSchema: sentinel2ImagerySchema,
+      callback: async (input) =>
+        toJsonValue(
+          await controlOrThrow().sentinel2ImageryForAgent({
+            bbox: input.bbox as BBox | string | undefined,
+            start: input.start,
+            end: input.end,
+            maxCloudCover: input.max_cloud_cover,
+            opacity: input.opacity,
+          }),
+        ),
+    }),
+    tool({
       name: "get_benchmark",
       description:
         "Return the locked human-QAed flood benchmark (the authoritative boundary), or a prompt to import one if none is locked.",
@@ -517,17 +800,19 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
     tool({
       name: "derive_flood_benchmark",
       description:
-        "Auto-derive a flood benchmark from OPERA DSWx for an AOI + date range when NO human-QAed benchmark is locked. Searches DSWx-HLS, renders the observed open/partial surface water on the map, vectorizes it into a polygon, and locks it as the working benchmark (labeled OPERA-observed, not QAed). Use this first when the user asks for a flood one-pager for a place + time. After it succeeds, continue with buildings_in_flood -> news_impact_search -> build_one_pager.",
+        "Auto-derive a flood benchmark from OPERA DSWx for an AOI + date range when NO human-QAed benchmark is locked. Searches DSWx-HLS, renders the observed open/partial surface water on the map, vectorizes it into a polygon, and locks it as the working benchmark (labeled OPERA-observed, not QAed). Use this first when the user asks to map or analyze a flood for a place + time. After it succeeds, continue with overture_in_flood and population_in_flood.",
       inputSchema: deriveFloodBenchmarkSchema,
       callback: async (input) =>
-        toJsonValue(await controlOrThrow().deriveFloodBenchmarkForAgent({
-          bbox: input.bbox as BBox | string | undefined,
-          start: input.start,
-          end: input.end,
-          eventName: input.event_name,
-          place: input.place,
-          maxGranules: input.max_granules,
-        })),
+        toJsonValue(
+          await controlOrThrow().deriveFloodBenchmarkForAgent({
+            bbox: input.bbox as BBox | string | undefined,
+            start: input.start,
+            end: input.end,
+            eventName: input.event_name,
+            place: input.place,
+            maxGranules: input.max_granules,
+          }),
+        ),
     }),
     tool({
       name: "buildings_in_flood",
@@ -535,11 +820,41 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
         "Intersect the locked benchmark flood water polygon with OSM building footprints (Overpass) to quantify building exposure within the flooded area. Requires a locked benchmark (human-QAed or derived via derive_flood_benchmark).",
       inputSchema: buildingsInFloodSchema,
       callback: async (input) =>
-        toJsonValue(await controlOrThrow().buildingsInFloodForAgent({
-          buildingSource: input.building_source,
-          addLayer: input.add_layer,
-          computeArea: input.compute_area,
-        })),
+        toJsonValue(
+          await controlOrThrow().buildingsInFloodForAgent({
+            buildingSource: input.building_source,
+            addLayer: input.add_layer,
+            computeArea: input.compute_area,
+          }),
+        ),
+    }),
+    tool({
+      name: "overture_in_flood",
+      description:
+        "Use GeoLibre's existing Overture Maps plugin and bounded PMTiles query to map building and transportation context, count flooded buildings, calculate transportation centerline length inside the flood, and add styled interactive impact layers. Requires a locked flood benchmark.",
+      inputSchema: overtureInFloodSchema,
+      callback: async (input) =>
+        toJsonValue(
+          await controlOrThrow().overtureInFloodForAgent({
+            addLayers: input.add_layers,
+            computeBuildingArea: input.compute_building_area,
+            maxTiles: input.max_tiles,
+            maxFeatures: input.max_features,
+          }),
+        ),
+    }),
+    tool({
+      name: "population_in_flood",
+      description:
+        "Calculate open-access WorldPop modeled residential population within the locked flood extent and add a styled 100 m population layer. The total is exposure context, not an event displacement count.",
+      inputSchema: populationInFloodSchema,
+      callback: async (input) =>
+        toJsonValue(
+          await controlOrThrow().populationInFloodForAgent({
+            year: input.year,
+            addLayer: input.add_layer,
+          }),
+        ),
     }),
     tool({
       name: "news_impact_search",
@@ -547,10 +862,12 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
         "Search reputable news for quantified financial/societal/public-safety impact figures. Returns results with source_url, publisher, and date so every figure is citable.",
       inputSchema: newsImpactSchema,
       callback: async (input) =>
-        toJsonValue(await controlOrThrow().newsImpactSearchForAgent({
-          query: input.query,
-          maxResults: input.max_results,
-        })),
+        toJsonValue(
+          await controlOrThrow().newsImpactSearchForAgent({
+            query: input.query,
+            maxResults: input.max_results,
+          }),
+        ),
     }),
     tool({
       name: "build_one_pager",
@@ -577,6 +894,21 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
                 source: input.buildings.source,
               }
             : undefined,
+          population: input.population
+            ? {
+                totalPopulation: input.population.total_population,
+                year: input.population.year,
+                source: input.population.source,
+              }
+            : undefined,
+          transportation: input.transportation
+            ? {
+                impactedSegmentCount:
+                  input.transportation.impacted_segment_count,
+                impactedLengthKm: input.transportation.impacted_length_km,
+                source: input.transportation.source,
+              }
+            : undefined,
           mapSnapshotDataUrl: input.map_snapshot_data_url,
           download: input.download,
         });
@@ -592,7 +924,11 @@ export function createOperaAgentTools(getControl: () => OperaControl | null): To
 }
 
 function endpointFor(control: OperaControl, endpoint?: string): string {
-  return endpoint?.trim() || control.getAgentContext().endpoint || DEFAULT_TITILER_CMR_ENDPOINT;
+  return (
+    endpoint?.trim() ||
+    control.getAgentContext().endpoint ||
+    DEFAULT_TITILER_CMR_ENDPOINT
+  );
 }
 
 function commonParams(control: OperaControl, input: TitilerCommonInput) {

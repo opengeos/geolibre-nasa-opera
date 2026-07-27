@@ -87,6 +87,16 @@ function createControl(app: AppAPI): OperaControl {
     addGeoJsonLayer: (name, data) => app.addGeoJsonLayer?.(name, data),
     registerLayer: (layer) => app.registerExternalNativeLayer?.(layer),
     unregisterLayer: (id) => app.unregisterExternalNativeLayer?.(id),
+    activatePlugin: async (pluginId, state) =>
+      (await app.activatePlugin?.(pluginId, state)) ?? false,
+    queryOvertureFeatures: (query) => {
+      if (!app.queryOvertureFeatures) {
+        return Promise.reject(
+          new Error("This GeoLibre host does not expose Overture queries."),
+        );
+      }
+      return app.queryOvertureFeatures(query);
+    },
     fitBounds: (bounds) => app.fitBounds?.(bounds),
     getMapBounds: () => readMapBounds(app),
     // In docked mode, agent actions that need the UI visible ask the host to
@@ -126,15 +136,15 @@ function proxyBaseUrl(proxyUrl: string, baseOrigin?: string): string {
 function readDeploymentEnv(): DeploymentEnv {
   if (typeof window === "undefined") return {};
   return (
-    window as unknown as {
-      __GEOLIBRE_DEPLOYMENT_ENV__?: DeploymentEnv;
-    }
-  ).__GEOLIBRE_DEPLOYMENT_ENV__ ?? {};
+    (
+      window as unknown as {
+        __GEOLIBRE_DEPLOYMENT_ENV__?: DeploymentEnv;
+      }
+    ).__GEOLIBRE_DEPLOYMENT_ENV__ ?? {}
+  );
 }
 
-function readManagedProxyConfig():
-  | { baseURL: string; modelId: string }
-  | null {
+function readManagedProxyConfig(): { baseURL: string; modelId: string } | null {
   const env = readDeploymentEnv();
   const proxyUrl = env.VITE_GEOLIBRE_AI_URL?.trim();
   if (!proxyUrl) return null;
