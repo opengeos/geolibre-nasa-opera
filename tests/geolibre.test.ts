@@ -80,6 +80,8 @@ function dockingApp() {
 describe("GeoLibre plugin entry", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    sessionStorage.clear();
+    delete window.__GEOLIBRE_DEPLOYMENT_ENV__;
   });
 
   it("activates the OPERA panel and companion GeoAgent control", async () => {
@@ -121,6 +123,34 @@ describe("GeoLibre plugin entry", () => {
         allowDestructiveTools: true,
       }),
     });
+  });
+
+  it("uses the GeoLibre managed AI proxy when Docker injects it", async () => {
+    window.__GEOLIBRE_DEPLOYMENT_ENV__ = {
+      VITE_GEOLIBRE_AI_URL: "/ai",
+      VITE_GEOLIBRE_AI_MODEL: "openai/gpt-5.5",
+    };
+    const plugin = await freshPlugin();
+    const app = appStub();
+
+    plugin.activate(app);
+    const state = plugin.getProjectState?.();
+
+    expect(state).toMatchObject({
+      geoAgent: expect.objectContaining({
+        providerId: "openai-compatible",
+        modelId: "openai/gpt-5.5",
+        baseUrl: `${window.location.origin}/ai/v1`,
+      }),
+    });
+    expect(
+      sessionStorage.getItem("geolibre.nasa-opera.geoagent.provider"),
+    ).toBe("openai-compatible");
+    expect(
+      sessionStorage.getItem(
+        "geolibre.nasa-opera.geoagent.openai-compatible.api_key",
+      ),
+    ).toBe("geolibre-managed-proxy");
   });
 
   it("restores legacy OPERA-only project state", async () => {
