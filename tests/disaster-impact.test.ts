@@ -575,10 +575,12 @@ describe("disaster impact control", () => {
       year: 2020,
       source: "WorldPop",
     });
+    const onePagerHtml = `<html>${"x".repeat(2_000_000)}</html>`;
     vi.spyOn(control, "buildOnePagerForAgent").mockResolvedValue({
       ok: true,
       status: "One-pager ready and downloaded.",
       filename: "opera-one-pager-valencia-region-spain-flood.html",
+      html: onePagerHtml,
     });
 
     const result = await control.mapDisasterEventForAgent({
@@ -666,7 +668,10 @@ describe("disaster impact control", () => {
     expect(result.onePager).toMatchObject({
       ok: true,
       filename: "opera-one-pager-valencia-region-spain-flood.html",
+      bytes: onePagerHtml.length,
     });
+    expect(result.onePager).not.toHaveProperty("html");
+    expect(JSON.stringify(result).length).toBeLessThan(10_000);
     expect(result.status).toContain("one-pager was downloaded");
     expect(addLayerGroup).toHaveBeenCalledWith(
       "Pre-event OPERA - Valencia Region, Spain flood",

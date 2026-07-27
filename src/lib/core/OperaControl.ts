@@ -525,7 +525,7 @@ export interface OperaAgentDisasterEventResult {
   };
   overture?: OperaAgentOvertureResult;
   population?: OperaAgentPopulationResult;
-  onePager?: OperaAgentOnePagerResult;
+  onePager?: Omit<OperaAgentOnePagerResult, "html"> & { bytes?: number };
   context?: OperaAgentDisasterContextResult;
   warnings: string[];
 }
@@ -2425,7 +2425,7 @@ export class OperaControl implements IControl {
     const sentinel2 = await addSentinelPair();
     let overture: OperaAgentOvertureResult | undefined;
     let population: OperaAgentPopulationResult | undefined;
-    let onePager: OperaAgentOnePagerResult | undefined;
+    let onePager: OperaAgentDisasterEventResult["onePager"];
     if (derived.ok) {
       overture = await this.overtureInFloodForAgent({
         bbox,
@@ -2438,7 +2438,7 @@ export class OperaControl implements IControl {
       if (!population.ok) warnings.push(population.status);
 
       this._setStatus("Preparing the flood assessment one-pager…");
-      onePager = await this.buildOnePagerForAgent({
+      const generatedOnePager = await this.buildOnePagerForAgent({
         buildings: overture.ok
           ? {
               floodedCount: overture.buildings.floodedCount,
@@ -2465,6 +2465,11 @@ export class OperaControl implements IControl {
           : undefined,
         download: true,
       });
+      const { html, ...onePagerSummary } = generatedOnePager;
+      onePager = {
+        ...onePagerSummary,
+        bytes: html?.length,
+      };
       if (!onePager.ok) warnings.push(onePager.status);
     }
 
