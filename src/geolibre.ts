@@ -55,6 +55,7 @@ interface NasaOperaProjectState {
 /** Stable ids for the host-managed right panel and toolbar menu. */
 const RIGHT_PANEL_ID = "geolibre-nasa-opera-panel";
 const TOOLBAR_MENU_ID = "geolibre-nasa-opera-menu";
+const GEOAGENT_AOI_CLASS = "opera-geoagent-aoi";
 
 let operaControl: OperaControl | null = null;
 let geoAgentControl: GeoAgentControl | null = null;
@@ -108,6 +109,7 @@ function createControl(app: AppAPI): OperaControl {
     },
     fitBounds: (bounds) => app.fitBounds?.(bounds),
     getMapBounds: () => readMapBounds(app),
+    onAgentAoiChange: () => syncGeoAgentAoiControls(),
     // In docked mode, agent actions that need the UI visible ask the host to
     // reveal the right panel instead of driving the floating panel.
     onRequestReveal: () => app.openRightPanel?.(RIGHT_PANEL_ID),
@@ -326,6 +328,75 @@ function readMapBounds(app: AppAPI): BBox | null {
   return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
 }
 
+function aoiLabel(bbox: BBox | undefined): string {
+  return bbox
+    ? `AOI: ${bbox.map((value) => value.toFixed(4)).join(", ")}`
+    : "No precise AOI";
+}
+
+function syncGeoAgentAoiControls(): void {
+  const panel = geoAgentControl?.getPanel();
+  const controls = panel?.querySelector<HTMLElement>(`.${GEOAGENT_AOI_CLASS}`);
+  if (!controls) return;
+  const bbox = operaControl?.getAgentAoi();
+  const draw = controls.querySelector<HTMLButtonElement>(
+    ".opera-geoagent-aoi-draw",
+  );
+  const clear = controls.querySelector<HTMLButtonElement>(
+    ".opera-geoagent-aoi-clear",
+  );
+  const status = controls.querySelector<HTMLOutputElement>(
+    ".opera-geoagent-aoi-status",
+  );
+  if (draw) draw.textContent = bbox ? "Redraw AOI" : "Draw AOI";
+  if (clear) clear.disabled = !bbox;
+  if (status) {
+    status.textContent = aoiLabel(bbox);
+    status.title = bbox?.join(", ") ?? "";
+  }
+}
+
+function enhanceGeoAgentAoiControls(): void {
+  const panel = geoAgentControl?.getPanel();
+  const form = panel?.querySelector<HTMLFormElement>(".geoagent-form");
+  if (!panel || !form || panel.querySelector(`.${GEOAGENT_AOI_CLASS}`)) {
+    syncGeoAgentAoiControls();
+    return;
+  }
+
+  const controls = document.createElement("div");
+  controls.className = GEOAGENT_AOI_CLASS;
+
+  const draw = document.createElement("button");
+  draw.type = "button";
+  draw.className = "opera-geoagent-aoi-draw secondary";
+  draw.title = "Draw a precise analysis area on the map";
+  draw.addEventListener("click", () => {
+    const drawing = operaControl?.toggleAgentAoiDraw() ?? false;
+    draw.textContent = drawing ? "Cancel draw" : "Draw AOI";
+    const status = controls.querySelector<HTMLOutputElement>(
+      ".opera-geoagent-aoi-status",
+    );
+    if (drawing && status) status.textContent = "Drag a rectangle on the map";
+    if (!drawing) syncGeoAgentAoiControls();
+  });
+
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "opera-geoagent-aoi-clear secondary";
+  clear.textContent = "Clear AOI";
+  clear.title = "Remove the current analysis area";
+  clear.addEventListener("click", () => operaControl?.clearAgentAoi());
+
+  const status = document.createElement("output");
+  status.className = "opera-geoagent-aoi-status";
+  status.setAttribute("aria-live", "polite");
+
+  controls.append(draw, clear, status);
+  form.parentElement?.insertBefore(controls, form);
+  syncGeoAgentAoiControls();
+}
+
 // --- Mount / unmount ------------------------------------------------------
 
 /** Add the GeoAgent companion as a floating map control (used in both modes). */
@@ -336,6 +407,7 @@ function mountGeoAgent(app: AppAPI, pos: GeoLibreMapControlPosition): boolean {
     geoAgentControl = null;
     return false;
   }
+  enhanceGeoAgentAoiControls();
   return true;
 }
 

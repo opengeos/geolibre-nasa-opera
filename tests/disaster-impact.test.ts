@@ -516,7 +516,11 @@ describe("disaster impact control", () => {
 
   it("runs the full flood workflow from place and dates", async () => {
     const addLayerGroup = vi.fn((name: string) => `group-${name}`);
-    const control = new OperaControl({ addLayerGroup });
+    const geocodePlace = vi.fn(async () => ({
+      bbox: [-0.95, 39.1, -0.05, 39.8] as [number, number, number, number],
+      displayName: "Valencia Region, Spain",
+    }));
+    const control = new OperaControl({ addLayerGroup, geocodePlace });
     vi.spyOn(control, "searchForAgent").mockResolvedValue({
       ok: true,
       status: "Found pre-event OPERA.",
@@ -575,12 +579,13 @@ describe("disaster impact control", () => {
     const result = await control.mapDisasterEventForAgent({
       hazard: "flood",
       place: "Valencia Region, Spain",
-      bbox: [-0.95, 39.1, -0.05, 39.8],
       start: "2024-10-27",
       end: "2024-11-05",
     });
 
     expect(result.ok).toBe(true);
+    expect(result.bbox).toEqual([-0.95, 39.1, -0.05, 39.8]);
+    expect(geocodePlace).toHaveBeenCalledWith("Valencia Region, Spain");
     expect(result.windows).toEqual({
       preEvent: { start: "2024-09-27", end: "2024-10-26" },
       event: { start: "2024-10-27", end: "2024-11-05" },
@@ -591,6 +596,19 @@ describe("disaster impact control", () => {
         start: "2024-10-27",
         end: "2024-11-05",
         place: "Valencia Region, Spain",
+      }),
+    );
+    expect(control.searchForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bbox: [-0.95, 39.1, -0.05, 39.8],
+        addFootprints: false,
+        fitBounds: false,
+      }),
+    );
+    expect(control.displayForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clipBounds: [-0.95, 39.1, -0.05, 39.8],
+        fitBounds: false,
       }),
     );
     expect(control.sentinel2ImageryForAgent).toHaveBeenNthCalledWith(
@@ -622,6 +640,46 @@ describe("disaster impact control", () => {
     expect(addLayerGroup).toHaveBeenCalledWith(
       "Post-event OPERA - Valencia Region, Spain flood",
       ["opera-post"],
+    );
+  });
+
+  it("uses a user-drawn AOI before supplied or geocoded bounds", async () => {
+    const drawnAoi: [number, number, number, number] = [
+      -0.72, 39.2, -0.18, 39.62,
+    ];
+    const geocodePlace = vi.fn(async () => ({
+      bbox: [-2, 38, 1, 41] as [number, number, number, number],
+      displayName: "Valencia Region, Spain",
+    }));
+    const control = new OperaControl({ geocodePlace });
+    control.setState({ agentAoiBBox: drawnAoi });
+    vi.spyOn(control, "mapDisasterContextForAgent").mockResolvedValue({
+      ok: true,
+      status: "Mapped context.",
+      hazard: "wildfire",
+      bbox: drawnAoi,
+      overtureContextActivated: true,
+    });
+    vi.spyOn(control, "sentinel2ImageryForAgent").mockImplementation(
+      async () => ({
+        ok: true,
+        status: "Added imagery.",
+        provider: "Sentinel-2",
+      }),
+    );
+
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "wildfire",
+      place: "Valencia Region, Spain",
+      bbox: [-1.5, 38, 0.7, 40.8],
+      start: "2024-10-27",
+      end: "2024-11-05",
+    });
+
+    expect(result.bbox).toEqual(drawnAoi);
+    expect(geocodePlace).not.toHaveBeenCalled();
+    expect(control.mapDisasterContextForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ bbox: drawnAoi }),
     );
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chooseZoom,
+  deriveFloodExtent,
   traceMaskRings,
   maskToFeatureCollection,
 } from "../src/lib/opera/flood-extent";
@@ -29,12 +30,19 @@ describe("traceMaskRings", () => {
     expect(ring[0]).toEqual(ring[ring.length - 1]);
     // collinear-reduced rectangle: 4 corners + closing point
     expect(ring).toHaveLength(5);
-    const corners = ring.slice(0, 4).map(([x, y]) => `${x},${y}`).sort();
+    const corners = ring
+      .slice(0, 4)
+      .map(([x, y]) => `${x},${y}`)
+      .sort();
     expect(corners).toEqual(["1,1", "1,4", "4,1", "4,4"]);
   });
 
   it("returns two rings for two disjoint blocks", () => {
-    const mask = makeMask(10, 5, (x, y) => (x >= 1 && x <= 2 || x >= 6 && x <= 7) && y >= 1 && y <= 3);
+    const mask = makeMask(
+      10,
+      5,
+      (x, y) => ((x >= 1 && x <= 2) || (x >= 6 && x <= 7)) && y >= 1 && y <= 3,
+    );
     expect(traceMaskRings(mask, 10, 5)).toHaveLength(2);
   });
 
@@ -54,10 +62,21 @@ describe("maskToFeatureCollection", () => {
   const originPy = 1500 * 256;
 
   it("projects a block into a single valid polygon feature", () => {
-    const mask = makeMask(60, 60, (x, y) => x >= 5 && x <= 45 && y >= 5 && y <= 45);
-    const fc = maskToFeatureCollection(mask, 60, 60, { zoom, originPx, originPy });
+    const mask = makeMask(
+      60,
+      60,
+      (x, y) => x >= 5 && x <= 45 && y >= 5 && y <= 45,
+    );
+    const fc = maskToFeatureCollection(mask, 60, 60, {
+      zoom,
+      originPx,
+      originPy,
+    });
     expect(fc.features).toHaveLength(1);
-    const geom = fc.features[0].geometry as { type: string; coordinates: number[][][] };
+    const geom = fc.features[0].geometry as {
+      type: string;
+      coordinates: number[][][];
+    };
     expect(geom.type).toBe("Polygon");
     // exterior ring closed
     const ext = geom.coordinates[0];
@@ -72,9 +91,14 @@ describe("maskToFeatureCollection", () => {
       const inHole = x >= 20 && x <= 40 && y >= 20 && y <= 40;
       return inBlock && !inHole;
     });
-    const fc = maskToFeatureCollection(mask, 60, 60, { zoom, originPx, originPy });
+    const fc = maskToFeatureCollection(mask, 60, 60, {
+      zoom,
+      originPx,
+      originPy,
+    });
     expect(fc.features).toHaveLength(1);
-    const coords = (fc.features[0].geometry as { coordinates: number[][][] }).coordinates;
+    const coords = (fc.features[0].geometry as { coordinates: number[][][] })
+      .coordinates;
     expect(coords.length).toBe(2); // exterior + one hole
 
     // A point in the block (but outside the hole) is water; a point in the hole is not.
@@ -86,7 +110,8 @@ describe("maskToFeatureCollection", () => {
     // center sits inside the hole -> not water
     expect(pointInWater([cLon, cLat], fc)).toBe(false);
     // a point near the exterior edge (well outside the hole) -> water
-    const edgeLon = Math.min(...lons) + (Math.max(...lons) - Math.min(...lons)) * 0.08;
+    const edgeLon =
+      Math.min(...lons) + (Math.max(...lons) - Math.min(...lons)) * 0.08;
     expect(pointInWater([edgeLon, cLat], fc)).toBe(true);
   });
 });
@@ -97,5 +122,36 @@ describe("chooseZoom", () => {
     const z = chooseZoom(bbox, 6);
     expect(z).toBeGreaterThan(8);
     expect(z).toBeLessThanOrEqual(16);
+  });
+
+  it("keeps world-scale polar bounds finite", async () => {
+    const urls: string[] = [];
+    const result = await deriveFloodExtent(
+      [-180, -90, 180, 90],
+      ["https://tiles.example/{z}/{x}/{y}.png"],
+      {
+        loadTile: async (url) => {
+          urls.push(url);
+          return null;
+        },
+      },
+    );
+
+    expect(result.features).toEqual([]);
+    expect(urls).toHaveLength(16);
+    expect(
+      urls.every((url) =>
+        /^https:\/\/tiles\.example\/2\/[0-3]\/[0-3]\.png$/.test(url),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects non-finite bounds before allocating a mask", async () => {
+    await expect(
+      deriveFloodExtent(
+        [-1, -1, Number.POSITIVE_INFINITY, 1],
+        ["https://tiles.example/{z}/{x}/{y}.png"],
+      ),
+    ).rejects.toThrow(/finite bbox/);
   });
 });
