@@ -1,7 +1,9 @@
 import {
   GeoAgentControl,
+  type GeoAgentControlOptions,
   type GeoAgentState,
 } from "maplibre-gl-geoagent";
+import type { Model } from "@strands-agents/sdk";
 import { OperaControl, type OperaState } from "./lib/core/OperaControl";
 import type {
   GeoLibreAppAPI,
@@ -20,6 +22,17 @@ import "./lib/styles/plugin-control.css";
 // This plugin owns two MapLibre controls: the OPERA search panel and a
 // companion GeoAgent chat panel. Use the structural control type for host calls.
 type AppAPI = GeoLibreAppAPI<GeoLibreControl>;
+type DeploymentEnv = Record<string, string | undefined>;
+type GeoAgentProviderModelFactory = (
+  providerId: string,
+  modelId: string,
+  apiKey: string,
+  bedrockRegion: string,
+  baseUrl: string,
+) => Promise<Model>;
+type GeoAgentModelFactoryPatchPoint = {
+  createProviderModel?: GeoAgentProviderModelFactory;
+};
 
 /**
  * Where the OPERA search UI lives:
@@ -57,6 +70,8 @@ let unregisterRightPanel: (() => void) | null = null;
 let disposeToolbarMenu: (() => void) | null = null;
 let pendingOperaState: Partial<OperaState> | null = null;
 let pendingGeoAgentState: Partial<GeoAgentState> | null = null;
+const GEOAGENT_STORAGE_PREFIX = "geolibre.nasa-opera.geoagent";
+const MANAGED_PROXY_API_KEY = "geolibre-managed-proxy";
 
 function createControl(app: AppAPI): OperaControl {
   const next = new OperaControl({
@@ -94,25 +109,177 @@ const BUNDLED_OPENAI_API_KEY =
     ? __OPERA_OPENAI_API_KEY__.trim()
     : "";
 
+function browserOrigin(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const origin = window.location?.origin;
+  return origin && origin !== "null" ? origin : undefined;
+}
+
+function proxyBaseUrl(proxyUrl: string, baseOrigin?: string): string {
+  let normalized = proxyUrl.trim().replace(/\/+$/, "");
+  if (baseOrigin && normalized.startsWith("/")) {
+    normalized = new URL(normalized, baseOrigin).toString().replace(/\/+$/, "");
+  }
+  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
+}
+
+function readDeploymentEnv(): DeploymentEnv {
+  if (typeof window === "undefined") return {};
+  return (
+    window as unknown as {
+      __GEOLIBRE_DEPLOYMENT_ENV__?: DeploymentEnv;
+    }
+  ).__GEOLIBRE_DEPLOYMENT_ENV__ ?? {};
+}
+
+function readManagedProxyConfig():
+  | { baseURL: string; modelId: string }
+  | null {
+  const env = readDeploymentEnv();
+  const proxyUrl = env.VITE_GEOLIBRE_AI_URL?.trim();
+  if (!proxyUrl) return null;
+  return {
+    baseURL: proxyBaseUrl(proxyUrl, browserOrigin()),
+    modelId: env.VITE_GEOLIBRE_AI_MODEL?.trim() || "openai/gpt-5.5",
+  };
+}
+
+function storageGet(key: string): string | null {
+  try {
+    return globalThis.sessionStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key: string, value: string): void {
+  try {
+    globalThis.sessionStorage?.setItem(key, value);
+  } catch {
+    // Ignore storage failures in private or restricted browser contexts.
+  }
+}
+
+function seedManagedProxyStorage(config: {
+  baseURL: string;
+  modelId: string;
+}): void {
+  const providerKey = `${GEOAGENT_STORAGE_PREFIX}.provider`;
+  const storedProvider = storageGet(providerKey);
+  const storedProviderKey = storedProvider
+    ? storageGet(`${GEOAGENT_STORAGE_PREFIX}.${storedProvider}.api_key`)
+    : null;
+
+  if (!storedProvider || !storedProviderKey) {
+    storageSet(providerKey, "openai-compatible");
+  }
+  storageSet(
+    `${GEOAGENT_STORAGE_PREFIX}.openai-compatible.api_key`,
+    MANAGED_PROXY_API_KEY,
+  );
+  storageSet(
+    `${GEOAGENT_STORAGE_PREFIX}.baseUrl.openai-compatible`,
+    config.baseURL,
+  );
+  storageSet(
+    `${GEOAGENT_STORAGE_PREFIX}.model.openai-compatible`,
+    config.modelId,
+  );
+}
+
+function managedProxyState(config: {
+  baseURL: string;
+  modelId: string;
+}): Partial<GeoAgentState> {
+  return {
+    providerId: "openai-compatible",
+    modelId: config.modelId,
+    baseUrl: config.baseURL,
+  };
+}
+
+function installManagedProxyModelFactory(
+  control: GeoAgentControl,
+  config: { baseURL: string },
+): void {
+  const patchable = control as unknown as GeoAgentModelFactoryPatchPoint;
+  const originalCreateProviderModel =
+    patchable.createProviderModel?.bind(control);
+  if (!originalCreateProviderModel) return;
+
+  patchable.createProviderModel = async (
+    providerId,
+    modelId,
+    apiKey,
+    bedrockRegion,
+    baseUrl,
+  ) => {
+    const normalizedBaseUrl = proxyBaseUrl(baseUrl);
+    if (
+      providerId === "openai-compatible" &&
+      apiKey === MANAGED_PROXY_API_KEY &&
+      normalizedBaseUrl === config.baseURL
+    ) {
+      const { OpenAIModel } = await import("@strands-agents/sdk/models/openai");
+      return new OpenAIModel({
+        api: "chat",
+        apiKey,
+        modelId,
+        clientConfig: {
+          baseURL: normalizedBaseUrl,
+          defaultHeaders: { Authorization: null },
+          dangerouslyAllowBrowser: true,
+        },
+      }) as unknown as Model;
+    }
+    return originalCreateProviderModel(
+      providerId,
+      modelId,
+      apiKey,
+      bedrockRegion,
+      baseUrl,
+    );
+  };
+}
+
 function createGeoAgentControl(): GeoAgentControl {
-  const next = new GeoAgentControl({
-    ...(BUNDLED_OPENAI_API_KEY
-      ? { apiKeys: { "openai-responses": BUNDLED_OPENAI_API_KEY } }
-      : {}),
+  const managedProxy = readManagedProxyConfig();
+  if (managedProxy) seedManagedProxyStorage(managedProxy);
+  const geoAgentOptions: GeoAgentControlOptions = {
+    ...(managedProxy
+      ? {
+          defaultProvider: "openai-compatible",
+          defaultModel: { "openai-compatible": managedProxy.modelId },
+          apiKeys: { "openai-compatible": MANAGED_PROXY_API_KEY },
+        }
+      : BUNDLED_OPENAI_API_KEY
+        ? { apiKeys: { "openai-responses": BUNDLED_OPENAI_API_KEY } }
+        : {}),
     collapsed: pendingGeoAgentState?.collapsed ?? true,
     panelWidth: pendingGeoAgentState?.panelWidth ?? 410,
     panelHeight: pendingGeoAgentState?.panelHeight,
     title: "OPERA GeoAgent",
-    storagePrefix: "geolibre.nasa-opera.geoagent",
+    storagePrefix: GEOAGENT_STORAGE_PREFIX,
     allowCodeExecutionDefault: pendingGeoAgentState?.allowCodeExecution ?? true,
     allowDestructiveToolsDefault:
       pendingGeoAgentState?.allowDestructiveTools ?? true,
     showPermissionToggles: false,
     customSystemPrompt: OPERA_AGENT_SYSTEM_PROMPT,
     customTools: () => createOperaAgentTools(() => operaControl),
+  };
+  const next = new GeoAgentControl({
+    ...geoAgentOptions,
   });
+  if (managedProxy) installManagedProxyModelFactory(next, managedProxy);
 
-  if (pendingGeoAgentState) next.setState(pendingGeoAgentState);
+  if (pendingGeoAgentState) {
+    next.setState({
+      ...pendingGeoAgentState,
+      ...(managedProxy ? managedProxyState(managedProxy) : {}),
+    });
+  } else if (managedProxy) {
+    next.setState(managedProxyState(managedProxy));
+  }
   return next;
 }
 

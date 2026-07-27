@@ -8,3 +8,7 @@
  * demo deployments; prefer a server-side proxy for public deployments.
  */
 declare const __OPERA_OPENAI_API_KEY__: string;
+
+interface Window {
+  __GEOLIBRE_DEPLOYMENT_ENV__?: Record<string, string | undefined>;
+}
