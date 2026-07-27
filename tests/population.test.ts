@@ -85,6 +85,24 @@ describe("WorldPop", () => {
     expect(sleep).toHaveBeenCalledWith(1000);
   });
 
+  it("aborts a stalled WorldPop request", async () => {
+    const fetchImpl = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
+    );
+
+    await expect(
+      fetchWorldPopPopulation(area, {
+        fetchImpl: fetchImpl as never,
+        requestTimeoutMs: 5,
+      }),
+    ).rejects.toThrow("WorldPop request timed out after 1 seconds.");
+  });
+
   it("builds a transparent, styled population image URL", () => {
     const url = new URL(worldPopImageUrl([-1, 2, 3, 4]));
 

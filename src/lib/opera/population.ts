@@ -19,6 +19,8 @@ export interface WorldPopPopulationOptions {
   year?: number;
   endpoint?: string;
   fetchImpl?: typeof fetch;
+  /** Maximum duration of each WorldPop HTTP request. Defaults to 30 seconds. */
+  requestTimeoutMs?: number;
   pollIntervalMs?: number;
   maxPolls?: number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -65,6 +67,34 @@ async function readResponse(response: Response): Promise<WorldPopResponse> {
   return body;
 }
 
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw Object.assign(
+        new Error(
+          `WorldPop request timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`,
+        ),
+        { cause: error },
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Sum WorldPop population within a flood polygon using the public WorldPop API.
  */
@@ -80,6 +110,7 @@ export async function fetchWorldPopPopulation(
   }
   const fetchImpl = options.fetchImpl ?? fetch;
   const endpoint = options.endpoint ?? WORLDPOP_STATS_ENDPOINT;
+  const requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 30_000);
   const form = new URLSearchParams({
     dataset: WORLDPOP_DATASET,
     year: String(year),
@@ -87,11 +118,16 @@ export async function fetchWorldPopPopulation(
     geojson: JSON.stringify(water),
   });
   let payload = await readResponse(
-    await fetchImpl(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form,
-    }),
+    await fetchWithTimeout(
+      fetchImpl,
+      endpoint,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form,
+      },
+      requestTimeoutMs,
+    ),
   );
   let total = numericTotal(payload);
   const taskId = payload.taskid;
@@ -108,7 +144,9 @@ export async function fetchWorldPopPopulation(
     ).toString();
     for (let poll = 0; poll < maxPolls && total === null; poll += 1) {
       await sleep(pollIntervalMs);
-      payload = await readResponse(await fetchImpl(taskUrl));
+      payload = await readResponse(
+        await fetchWithTimeout(fetchImpl, taskUrl, undefined, requestTimeoutMs),
+      );
       total = numericTotal(payload);
     }
   }

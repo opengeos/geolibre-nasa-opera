@@ -447,7 +447,11 @@ export interface TransportationInFloodResult {
 export function transportationInFlood(
   transportation: GeoFeatureCollection,
   water: WaterInput,
+  options: { allowedSubtypes?: readonly string[] } = {},
 ): TransportationInFloodResult {
+  const allowedSubtypes = options.allowedSubtypes
+    ? new Set(options.allowedSubtypes)
+    : null;
   const testedIds = new Set<string>();
   const impactedIds = new Set<string>();
   const subtypeIds = new Map<string, Set<string>>();
@@ -455,6 +459,11 @@ export function transportationInFlood(
   let impactedLengthKm = 0;
 
   transportation.features.forEach((feature, index) => {
+    const subtype =
+      typeof feature.properties?.subtype === "string"
+        ? feature.properties.subtype
+        : "other";
+    if (allowedSubtypes && !allowedSubtypes.has(subtype)) return;
     const geometry = feature.geometry as LinearGeometry;
     if (
       geometry?.type !== "LineString" &&
@@ -479,10 +488,6 @@ export function transportationInFlood(
 
     impactedIds.add(key);
     impactedLengthKm += featureLengthKm;
-    const subtype =
-      typeof feature.properties?.subtype === "string"
-        ? feature.properties.subtype
-        : "other";
     const ids = subtypeIds.get(subtype) ?? new Set<string>();
     ids.add(key);
     subtypeIds.set(subtype, ids);

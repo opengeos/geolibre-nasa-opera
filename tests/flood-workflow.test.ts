@@ -157,6 +157,45 @@ describe("geometry", () => {
     expect(result.impactedLengthKm).toBeLessThan(112);
     expect(result.impactedFeatures).toHaveLength(1);
   });
+
+  it("can restrict impact clipping to roads and exclude ferry artifacts", () => {
+    const transportation: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { _overture_id: "road-1", subtype: "road" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-0.5, 0.5],
+              [1.5, 0.5],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: { _overture_id: "ferry-1", subtype: "water" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-10, 0.5],
+              [10, 0.5],
+            ],
+          },
+        },
+      ],
+    };
+
+    const result = transportationInFlood(transportation, waterFC, {
+      allowedSubtypes: ["road"],
+    });
+
+    expect(result.total).toBe(1);
+    expect(result.impactedCount).toBe(1);
+    expect(result.bySubtype).toEqual({ road: 1 });
+    expect(result.impactedFeatures[0].properties?.subtype).toBe("road");
+  });
 });
 
 describe("benchmark", () => {

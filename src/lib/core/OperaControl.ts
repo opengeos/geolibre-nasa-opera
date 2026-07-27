@@ -121,6 +121,10 @@ export interface OperaControlOptions {
   registerLayer?: (layer: GeoLibreNativeLayerRegistration) => void;
   /** Remove a previously registered native layer by id. */
   unregisterLayer?: (id: string) => void;
+  /** Create a named host layer group, optionally assigning existing layers. */
+  addLayerGroup?: (name: string, layerIds?: string[]) => string;
+  /** Remove a host layer group without removing its child layers. */
+  removeLayerGroup?: (id: string) => void;
   /** Activate another GeoLibre plugin and optionally apply a partial state. */
   activatePlugin?: (
     pluginId: string,
@@ -351,6 +355,8 @@ export interface OperaAgentBuildingsResult {
 }
 
 export interface OperaAgentOvertureParams {
+  /** Analysis AOI. Defaults to the locked benchmark bbox. */
+  bbox?: BBox | string;
   /** Draw styled flooded-building and impacted-transportation layers. */
   addLayers?: boolean;
   /** Sum flooded building footprint area. */
@@ -366,6 +372,8 @@ export interface OperaAgentOvertureResult {
   status: string;
   release?: string;
   contextPluginActivated: boolean;
+  /** Complete AOI context and highlighted impact layer ids. */
+  layerIds: string[];
   buildings: {
     total: number;
     floodedCount: number;
@@ -438,6 +446,10 @@ export interface OperaAgentSentinel2Params {
   maxCloudCover?: number;
   /** Raster opacity. Defaults to 0.78. */
   opacity?: number;
+  /** Temporal role used to name and group an automatic event layer. */
+  period?: "pre-event" | "post-event";
+  /** Event label used in automatic layer-group names. */
+  eventName?: string;
 }
 
 export interface OperaAgentSentinel2Result {
@@ -449,6 +461,55 @@ export interface OperaAgentSentinel2Result {
   provider: string;
   layerId?: string;
   stacItemUrl?: string;
+}
+
+export interface OperaAgentDisasterEventParams {
+  /** Disaster type, such as flood, earthquake, wildfire, or landslide. */
+  hazard: string;
+  /** Human place label supplied by the user. */
+  place?: string;
+  /** Event/AOI label. Defaults to a label derived from place and hazard. */
+  eventName?: string;
+  /** Event AOI. Omit to use the current map extent. */
+  bbox?: BBox | string;
+  /** Inclusive event start date, YYYY-MM-DD. */
+  start: string;
+  /** Inclusive event end date, YYYY-MM-DD. */
+  end: string;
+  /** Number of days searched before the event for baseline imagery. */
+  preEventDays?: number;
+  /** Number of days searched after the event for clear optical imagery. */
+  postEventDays?: number;
+}
+
+interface DisasterPeriodResult {
+  ok: boolean;
+  status: string;
+  layerIds: string[];
+}
+
+export interface OperaAgentDisasterEventResult {
+  ok: boolean;
+  status: string;
+  hazard: string;
+  bbox?: BBox;
+  windows?: {
+    preEvent: { start: string; end: string };
+    event: { start: string; end: string };
+    postEvent: { start: string; end: string };
+  };
+  opera?: {
+    preEvent: DisasterPeriodResult;
+    postEvent: DisasterPeriodResult;
+  };
+  sentinel2?: {
+    preEvent: OperaAgentSentinel2Result;
+    postEvent: OperaAgentSentinel2Result;
+  };
+  overture?: OperaAgentOvertureResult;
+  population?: OperaAgentPopulationResult;
+  context?: OperaAgentDisasterContextResult;
+  warnings: string[];
 }
 
 export interface OperaAgentNewsParams {
@@ -605,6 +666,7 @@ export class OperaControl implements IControl {
   private _sortDir: 1 | -1 = 1;
   private _bands: GranuleBand[] = [];
   private _registeredLayerIds: string[] = [];
+  private _registeredGroupIds = new Map<string, string>();
 
   private _resizeHandler: (() => void) | null = null;
   private _mapResizeHandler: (() => void) | null = null;
@@ -1678,6 +1740,7 @@ export class OperaControl implements IControl {
       ok: false,
       status,
       contextPluginActivated,
+      layerIds: [],
       buildings: {
         total: 0,
         floodedCount: 0,
@@ -1698,6 +1761,15 @@ export class OperaControl implements IControl {
         "This GeoLibre host does not expose bounded Overture queries. Update GeoLibre or use buildings_in_flood for the OSM fallback.",
       );
     }
+    const queryBBox =
+      params.bbox === undefined
+        ? benchmark.bbox
+        : normalizeAgentBBox(params.bbox);
+    if (!queryBBox) {
+      return emptyResult(
+        "Provide a valid Overture analysis bbox as [west,south,east,north].",
+      );
+    }
 
     this.expand();
     const contextPluginActivated =
@@ -1716,15 +1788,13 @@ export class OperaControl implements IControl {
         query({
           theme: "buildings",
           sourceLayer: "building",
-          bbox: benchmark.bbox,
+          bbox: queryBBox,
           ...limits,
         }),
         query({
           theme: "transportation",
           sourceLayer: "segment",
-          bbox: benchmark.bbox,
-          filterGeometry: benchmark.water,
-          filterMode: "intersects",
+          bbox: queryBBox,
           ...limits,
         }),
       ]);
@@ -1745,17 +1815,85 @@ export class OperaControl implements IControl {
     const buildings = dedupeOvertureFeatures(
       buildingQuery.data as unknown as GeoFeatureCollection,
     );
+    const transportation = {
+      type: "FeatureCollection",
+      features: (
+        transportationQuery.data as unknown as GeoFeatureCollection
+      ).features.filter((feature) =>
+        ["road", "rail", "water"].includes(
+          typeof feature.properties?.subtype === "string"
+            ? feature.properties.subtype
+            : "",
+        ),
+      ),
+    } satisfies GeoFeatureCollection;
     const buildingImpact = buildingsInFlood(buildings, benchmark.water, {
       computeArea: params.computeBuildingArea,
     });
     const transportationImpact = transportationInFlood(
-      transportationQuery.data as unknown as GeoFeatureCollection,
+      transportation,
       benchmark.water,
+      { allowedSubtypes: ["road"] },
     );
 
+    let buildingsContextLayerId: string | undefined;
+    const transportationContextLayerIds: string[] = [];
     let buildingsLayerId: string | undefined;
     let transportationLayerId: string | undefined;
     if (params.addLayers !== false) {
+      if (buildings.features.length > 0) {
+        buildingsContextLayerId = this._addStyledGeoJsonImpactLayer({
+          id: "opera-context-overture-buildings",
+          name: `All Overture buildings - ${benchmark.event.name}`,
+          data: buildings,
+          geometry: "fill",
+          color: "#64748b",
+          opacity: 0.18,
+          strokeColor: "#475569",
+          strokeWidth: 0.6,
+          sourceKind: "opera-overture-context",
+        });
+      }
+      const transportationStyles = [
+        {
+          subtype: "road",
+          label: "roads",
+          color: "#475569",
+          opacity: 0.5,
+          strokeWidth: 1.2,
+        },
+        {
+          subtype: "rail",
+          label: "rail",
+          color: "#7c3aed",
+          opacity: 0.42,
+          strokeWidth: 1,
+        },
+        {
+          subtype: "water",
+          label: "water routes",
+          color: "#0284c7",
+          opacity: 0.24,
+          strokeWidth: 0.8,
+        },
+      ] as const;
+      for (const style of transportationStyles) {
+        const features = transportation.features.filter(
+          (feature) => feature.properties?.subtype === style.subtype,
+        );
+        if (features.length === 0) continue;
+        const layerId = this._addStyledGeoJsonImpactLayer({
+          id: `opera-context-overture-${style.subtype}`,
+          name: `All Overture ${style.label} - ${benchmark.event.name}`,
+          data: { type: "FeatureCollection", features },
+          geometry: "line",
+          color: style.color,
+          opacity: style.opacity,
+          strokeWidth: style.strokeWidth,
+          sourceKind: "opera-overture-context",
+        });
+        if (layerId) transportationContextLayerIds.push(layerId);
+      }
       if (buildingImpact.floodedFeatures.length > 0) {
         buildingsLayerId = this._addStyledGeoJsonImpactLayer({
           id: "opera-impact-overture-buildings",
@@ -1774,7 +1912,7 @@ export class OperaControl implements IControl {
       if (transportationImpact.impactedFeatures.length > 0) {
         transportationLayerId = this._addStyledGeoJsonImpactLayer({
           id: "opera-impact-overture-transportation",
-          name: `Flood-impacted transportation - ${benchmark.event.name}`,
+          name: `Flood-affected roads - ${benchmark.event.name}`,
           data: {
             type: "FeatureCollection",
             features: transportationImpact.impactedFeatures,
@@ -1786,16 +1924,28 @@ export class OperaControl implements IControl {
         });
       }
     }
+    const layerIds = [
+      buildingsContextLayerId,
+      ...transportationContextLayerIds,
+      buildingsLayerId,
+      transportationLayerId,
+    ].filter((id): id is string => Boolean(id));
+    this._replaceLayerGroup(
+      "overture-exposure",
+      `Overture exposure - ${benchmark.event.name}`,
+      layerIds,
+    );
 
     const status =
       `Overture ${buildingQuery.release}: ${buildingImpact.floodedCount.toLocaleString()} flooded ` +
-      `building(s) and ${transportationImpact.impactedLengthKm.toFixed(1)} km of impacted transportation.`;
+      `building(s) and ${transportationImpact.impactedLengthKm.toFixed(1)} km of affected roads.`;
     this._setStatus(status);
     return {
       ok: true,
       status,
       release: buildingQuery.release,
       contextPluginActivated,
+      layerIds,
       buildings: {
         total: buildingImpact.total,
         floodedCount: buildingImpact.floodedCount,
@@ -1809,7 +1959,7 @@ export class OperaControl implements IControl {
         impactedSegmentCount: transportationImpact.impactedCount,
         impactedLengthKm: transportationImpact.impactedLengthKm,
         bySubtype: transportationImpact.bySubtype,
-        source: `Overture Maps ${transportationQuery.release}`,
+        source: `Overture Maps ${transportationQuery.release} roads`,
         layerId: transportationLayerId,
       },
     };
@@ -1835,19 +1985,19 @@ export class OperaControl implements IControl {
     }
     this.expand();
     this._setStatus(`Calculating ${year} WorldPop exposure…`);
+    const layerId =
+      params.addLayer === false
+        ? undefined
+        : this._addWorldPopLayer(
+            worldPopImageUrl(benchmark.bbox, year),
+            benchmark.bbox,
+            year,
+            benchmark.event.name,
+          );
     try {
       const population = await fetchWorldPopPopulation(benchmark.water, {
         year,
       });
-      const layerId =
-        params.addLayer === false
-          ? undefined
-          : this._addWorldPopLayer(
-              worldPopImageUrl(benchmark.bbox, year),
-              benchmark.bbox,
-              year,
-              benchmark.event.name,
-            );
       const rounded = Math.round(population.totalPopulation);
       const status =
         `${rounded.toLocaleString()} people live within the flood extent ` +
@@ -1862,9 +2012,10 @@ export class OperaControl implements IControl {
         layerId,
       };
     } catch (err) {
-      const status = `WorldPop analysis failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`;
+      const detail = err instanceof Error ? err.message : String(err);
+      const status = layerId
+        ? `Added the WorldPop ${year} population layer, but the exposure total failed: ${detail}`
+        : `WorldPop analysis failed: ${detail}`;
       this._setStatus(status);
       return {
         ok: false,
@@ -1872,6 +2023,7 @@ export class OperaControl implements IControl {
         totalPopulation: 0,
         year,
         source: "WorldPop",
+        layerId,
       };
     }
   }
@@ -1979,6 +2131,223 @@ export class OperaControl implements IControl {
   }
 
   /**
+   * Run the default disaster workflow from a hazard, place/AOI, and dates.
+   *
+   * Floods receive grouped pre/post OPERA and Sentinel-2 observations plus
+   * Overture and WorldPop exposure. Other hazards receive contextual layers
+   * and optical imagery until a usable hazard polygon is available.
+   */
+  async mapDisasterEventForAgent(
+    params: OperaAgentDisasterEventParams,
+  ): Promise<OperaAgentDisasterEventResult> {
+    const hazard = params.hazard.trim().toLowerCase();
+    const bbox =
+      (params.bbox !== undefined
+        ? normalizeAgentBBox(params.bbox)
+        : undefined) ?? this._currentBBox();
+    const warnings: string[] = [];
+    if (!hazard) {
+      return {
+        ok: false,
+        status: "Provide a disaster type.",
+        hazard,
+        warnings,
+      };
+    }
+    if (!bbox) {
+      return {
+        ok: false,
+        status:
+          "Navigate to the event location or provide a valid bbox before mapping the disaster.",
+        hazard,
+        warnings,
+      };
+    }
+
+    let start: Date;
+    let end: Date;
+    try {
+      start = parseIsoDate(params.start);
+      end = parseIsoDate(params.end);
+    } catch (error) {
+      return {
+        ok: false,
+        status: error instanceof Error ? error.message : String(error),
+        hazard,
+        bbox,
+        warnings,
+      };
+    }
+    if (start.getTime() > end.getTime()) {
+      return {
+        ok: false,
+        status: "Event start date must not be after the end date.",
+        hazard,
+        bbox,
+        warnings,
+      };
+    }
+
+    const preEventDays = Math.min(
+      90,
+      Math.max(7, Math.round(params.preEventDays ?? 30)),
+    );
+    const postEventDays = Math.min(
+      90,
+      Math.max(7, Math.round(params.postEventDays ?? 14)),
+    );
+    const iso = (value: Date): string => value.toISOString().slice(0, 10);
+    const preEvent = {
+      start: iso(addDays(start, -preEventDays)),
+      end: iso(addDays(start, -1)),
+    };
+    const event = {
+      start: params.start,
+      end:
+        start.getTime() === end.getTime() ? iso(addDays(end, 7)) : params.end,
+    };
+    const postEvent = {
+      start: params.end,
+      end: iso(addDays(end, postEventDays)),
+    };
+    const eventName =
+      params.eventName?.trim() ||
+      [params.place?.trim(), hazard].filter(Boolean).join(" ") ||
+      `${hazard} event`;
+    this._options.fitBounds?.(bbox);
+
+    const addSentinelPair = async (): Promise<{
+      preEvent: OperaAgentSentinel2Result;
+      postEvent: OperaAgentSentinel2Result;
+    }> => {
+      const pre = await this.sentinel2ImageryForAgent({
+        bbox,
+        start: preEvent.start,
+        end: preEvent.end,
+        period: "pre-event",
+        eventName,
+      });
+      if (!pre.ok) warnings.push(pre.status);
+      const post = await this.sentinel2ImageryForAgent({
+        bbox,
+        start: postEvent.start,
+        end: postEvent.end,
+        period: "post-event",
+        eventName,
+      });
+      if (!post.ok) warnings.push(post.status);
+      return { preEvent: pre, postEvent: post };
+    };
+
+    if (hazard !== "flood" && !hazard.includes("flood")) {
+      const context = await this.mapDisasterContextForAgent({
+        hazard,
+        eventName,
+        bbox,
+      });
+      const sentinel2 = await addSentinelPair();
+      const status = context.ok
+        ? `Mapped ${eventName} context. Quantified exposure requires a hazard polygon.`
+        : context.status;
+      this._setStatus(status);
+      return {
+        ok: context.ok,
+        status,
+        hazard,
+        bbox,
+        windows: { preEvent, event, postEvent },
+        sentinel2,
+        context,
+        warnings,
+      };
+    }
+
+    this._setStatus("Loading pre-event OPERA DSWx baseline…");
+    const preSearch = await this.searchForAgent({
+      product: "OPERA_L3_DSWX-HLS_V1",
+      bbox,
+      start: preEvent.start,
+      end: preEvent.end,
+      count: 6,
+    });
+    let preOpera: DisasterPeriodResult;
+    if (preSearch.ok && preSearch.granules.length > 0) {
+      const displayed = await this.displayForAgent({
+        maxGranules: 6,
+        band: "B01_WTR",
+        waterOnly: true,
+      });
+      preOpera = {
+        ok: displayed.ok,
+        status: displayed.status,
+        layerIds: displayed.displayedLayerIds,
+      };
+      if (!displayed.ok) warnings.push(displayed.status);
+      this._replaceLayerGroup(
+        "opera-pre-event",
+        `Pre-event OPERA - ${eventName}`,
+        displayed.displayedLayerIds,
+      );
+    } else {
+      preOpera = { ok: false, status: preSearch.status, layerIds: [] };
+      warnings.push(preSearch.status);
+    }
+
+    const derived = await this.deriveFloodBenchmarkForAgent({
+      bbox,
+      start: event.start,
+      end: event.end,
+      eventName,
+      place: params.place,
+      maxGranules: 6,
+    });
+    const postOpera: DisasterPeriodResult = {
+      ok: derived.ok,
+      status: derived.status,
+      layerIds: derived.dswxLayerIds,
+    };
+    this._replaceLayerGroup(
+      "opera-post-event",
+      `Post-event OPERA - ${eventName}`,
+      derived.dswxLayerIds,
+    );
+    if (!derived.ok) warnings.push(derived.status);
+
+    const sentinel2 = await addSentinelPair();
+    let overture: OperaAgentOvertureResult | undefined;
+    let population: OperaAgentPopulationResult | undefined;
+    if (derived.ok) {
+      overture = await this.overtureInFloodForAgent({
+        bbox,
+        addLayers: true,
+        computeBuildingArea: true,
+        maxFeatures: 250_000,
+      });
+      if (!overture.ok) warnings.push(overture.status);
+      population = await this.populationInFloodForAgent({ addLayer: true });
+      if (!population.ok) warnings.push(population.status);
+    }
+
+    const ok = derived.ok && Boolean(overture?.ok) && Boolean(population?.ok);
+    const status = ok
+      ? `Mapped ${eventName} with grouped pre/post observations and quantified flood exposure.`
+      : `Mapped available ${eventName} data with ${warnings.length} workflow warning(s).`;
+    this._setStatus(status);
+    return {
+      ok,
+      status,
+      hazard,
+      bbox,
+      windows: { preEvent, event, postEvent },
+      opera: { preEvent: preOpera, postEvent: postOpera },
+      sentinel2,
+      overture,
+      population,
+      warnings,
+    };
+  }
+
+  /**
    * Find and display a low-cloud Sentinel-2 true-color scene for the disaster
    * window using the public Planetary Computer STAC and tile APIs.
    */
@@ -2010,9 +2379,15 @@ export class OperaControl implements IControl {
         maxCloudCover: params.maxCloudCover,
       });
       const date = scene.datetime.slice(0, 10);
+      const periodLabel =
+        params.period === "pre-event"
+          ? "Pre-event"
+          : params.period === "post-event"
+            ? "Post-event"
+            : "";
       const registered = this.registerTileJsonForAgent({
-        id: `sentinel-2-${slug(scene.itemId)}`,
-        name: `Sentinel-2 true color - ${date}`,
+        id: `sentinel-2-${params.period ? `${params.period}-` : ""}${slug(scene.itemId)}`,
+        name: `${periodLabel ? `${periodLabel} ` : ""}Sentinel-2 true color - ${date}`,
         tilejson: scene.tilejson,
         opacity: Math.max(0, Math.min(1, params.opacity ?? 0.78)),
         fitBounds: false,
@@ -2026,10 +2401,20 @@ export class OperaControl implements IControl {
           datetime: scene.datetime,
           cloudCover: scene.cloudCover,
           stacItemUrl: scene.stacItemUrl,
+          ...(params.period ? { period: params.period } : {}),
         },
       });
       if (!registered.ok) {
         return { ok: false, status: registered.status, provider };
+      }
+      if (params.period && registered.layerId) {
+        this._replaceLayerGroup(
+          `sentinel-2-${params.period}`,
+          `${params.period === "pre-event" ? "Pre-event" : "Post-event"} Sentinel-2 - ${
+            params.eventName?.trim() || "disaster event"
+          }`,
+          [registered.layerId],
+        );
       }
       this._options.fitBounds?.(bbox);
       const cloudLabel =
@@ -2202,7 +2587,7 @@ export class OperaControl implements IControl {
               expanded: true,
               layers: {
                 building: {
-                  visible: true,
+                  visible: false,
                   opacity: 0.38,
                   color: "#64748b",
                   size: 1,
@@ -2214,7 +2599,7 @@ export class OperaControl implements IControl {
               expanded: true,
               layers: {
                 segment: {
-                  visible: true,
+                  visible: false,
                   opacity: 0.7,
                   color: "#0f766e",
                   size: 1.5,
@@ -2259,6 +2644,7 @@ export class OperaControl implements IControl {
     opacity: number;
     strokeColor?: string;
     strokeWidth: number;
+    sourceKind?: string;
   }): string | undefined {
     const map = this._map;
     if (!map) {
@@ -2322,7 +2708,7 @@ export class OperaControl implements IControl {
         strokeWidth: options.strokeWidth,
       },
       metadata: {
-        sourceKind: "opera-disaster-impact",
+        sourceKind: options.sourceKind ?? "opera-disaster-impact",
         interactive: true,
       },
     });
@@ -2397,6 +2783,31 @@ export class OperaControl implements IControl {
     }
   }
 
+  private _replaceLayerGroup(
+    key: string,
+    name: string,
+    layerIds: string[],
+  ): string | undefined {
+    const existing = this._registeredGroupIds.get(key);
+    if (existing) {
+      try {
+        this._options.removeLayerGroup?.(existing);
+      } catch {
+        // Continue and replace the stale group when the host permits it.
+      }
+      this._registeredGroupIds.delete(key);
+    }
+    if (layerIds.length === 0 || !this._options.addLayerGroup) return undefined;
+    try {
+      const id = this._options.addLayerGroup(name, layerIds);
+      if (!id) return undefined;
+      this._registeredGroupIds.set(key, id);
+      return id;
+    } catch {
+      return undefined;
+    }
+  }
+
   private _clearLayers(): void {
     const ids = [...this._registeredLayerIds];
     this._registeredLayerIds = [];
@@ -2407,6 +2818,14 @@ export class OperaControl implements IControl {
         // keep clearing
       }
     }
+    for (const id of this._registeredGroupIds.values()) {
+      try {
+        this._options.removeLayerGroup?.(id);
+      } catch {
+        // keep clearing
+      }
+    }
+    this._registeredGroupIds.clear();
   }
 
   // --- Actions -----------------------------------------------------------
