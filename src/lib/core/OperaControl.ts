@@ -525,6 +525,7 @@ export interface OperaAgentDisasterEventResult {
   };
   overture?: OperaAgentOvertureResult;
   population?: OperaAgentPopulationResult;
+  onePager?: OperaAgentOnePagerResult;
   context?: OperaAgentDisasterContextResult;
   warnings: string[];
 }
@@ -2424,6 +2425,7 @@ export class OperaControl implements IControl {
     const sentinel2 = await addSentinelPair();
     let overture: OperaAgentOvertureResult | undefined;
     let population: OperaAgentPopulationResult | undefined;
+    let onePager: OperaAgentOnePagerResult | undefined;
     if (derived.ok) {
       overture = await this.overtureInFloodForAgent({
         bbox,
@@ -2434,11 +2436,45 @@ export class OperaControl implements IControl {
       if (!overture.ok) warnings.push(overture.status);
       population = await this.populationInFloodForAgent({ addLayer: true });
       if (!population.ok) warnings.push(population.status);
+
+      this._setStatus("Preparing the flood assessment one-pager…");
+      onePager = await this.buildOnePagerForAgent({
+        buildings: overture.ok
+          ? {
+              floodedCount: overture.buildings.floodedCount,
+              total: overture.buildings.total,
+              fraction: overture.buildings.fraction,
+              floodedAreaKm2: overture.buildings.floodedAreaKm2,
+              source: overture.buildings.source,
+            }
+          : undefined,
+        population: population.ok
+          ? {
+              totalPopulation: population.totalPopulation,
+              year: population.year,
+              source: population.source,
+            }
+          : undefined,
+        transportation: overture.ok
+          ? {
+              impactedSegmentCount:
+                overture.transportation.impactedSegmentCount,
+              impactedLengthKm: overture.transportation.impactedLengthKm,
+              source: overture.transportation.source,
+            }
+          : undefined,
+        download: true,
+      });
+      if (!onePager.ok) warnings.push(onePager.status);
     }
 
-    const ok = derived.ok && Boolean(overture?.ok) && Boolean(population?.ok);
+    const ok =
+      derived.ok &&
+      Boolean(overture?.ok) &&
+      Boolean(population?.ok) &&
+      Boolean(onePager?.ok);
     const status = ok
-      ? `Mapped ${eventName} with grouped pre/post observations and quantified flood exposure.`
+      ? `Mapped ${eventName} with grouped pre/post observations and quantified flood exposure. The one-pager was downloaded.`
       : `Mapped available ${eventName} data with ${warnings.length} workflow warning(s).`;
     this._setStatus(status);
     return {
@@ -2451,6 +2487,7 @@ export class OperaControl implements IControl {
       sentinel2,
       overture,
       population,
+      onePager,
       warnings,
     };
   }
@@ -4644,7 +4681,8 @@ export class OperaControl implements IControl {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Revoke after the click is processed so the download is not interrupted.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   private _updateReportButton(): void {
