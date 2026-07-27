@@ -31,6 +31,47 @@ export interface GeoLibreFeatureCollection {
   features: unknown[];
 }
 
+/** Structural GeoJSON geometry accepted by host-side spatial query helpers. */
+export interface GeoLibreGeometry {
+  type: string;
+  coordinates?: unknown;
+  geometries?: GeoLibreGeometry[];
+}
+
+/** Overture themes exposed by GeoLibre's built-in Overture Maps plugin. */
+export type GeoLibreOvertureTheme =
+  | "addresses"
+  | "base"
+  | "buildings"
+  | "divisions"
+  | "places"
+  | "transportation";
+
+/** Bounded request for decoded features from GeoLibre's Overture PMTiles. */
+export interface GeoLibreOvertureQuery {
+  theme: GeoLibreOvertureTheme;
+  sourceLayer: string;
+  bbox: [number, number, number, number];
+  zoom?: number;
+  maxTiles?: number;
+  maxFeatures?: number;
+  filterGeometry?: GeoLibreFeatureCollection | GeoLibreGeometry;
+  filterMode?: "centroid-within" | "intersects";
+  signal?: AbortSignal;
+}
+
+/** Result metadata and GeoJSON returned by an Overture query. */
+export interface GeoLibreOvertureQueryResult {
+  data: GeoLibreFeatureCollection;
+  release: string;
+  theme: GeoLibreOvertureTheme;
+  sourceLayer: string;
+  zoom: number;
+  tilesRead: number;
+  matchedFeatureCount: number;
+  truncated: boolean;
+}
+
 /**
  * Visual styling hints for a native layer the host renders on the plugin's
  * behalf. Every field is optional; the host applies sensible defaults.
@@ -188,7 +229,9 @@ export interface GeoLibreControl {
  *
  * @typeParam TControl - The plugin's concrete control type.
  */
-export interface GeoLibreAppAPI<TControl extends GeoLibreControl = GeoLibreControl> {
+export interface GeoLibreAppAPI<
+  TControl extends GeoLibreControl = GeoLibreControl,
+> {
   /**
    * Add the plugin's control to the map. Returns `false` when the host refuses,
    * in which case the plugin should treat activation as failed.
@@ -208,6 +251,18 @@ export interface GeoLibreAppAPI<TControl extends GeoLibreControl = GeoLibreContr
     data: GeoLibreFeatureCollection,
     sourcePath?: string,
   ) => void;
+  /**
+   * Activate another built-in plugin and optionally apply a partial state.
+   * Returns false when the target plugin is unavailable or rejects the state.
+   */
+  activatePlugin?: (pluginId: string, state?: unknown) => boolean;
+  /**
+   * Read a bounded set of decoded Overture features from the host's official
+   * PMTiles source. The host enforces tile and feature limits.
+   */
+  queryOvertureFeatures?: (
+    query: GeoLibreOvertureQuery,
+  ) => Promise<GeoLibreOvertureQueryResult>;
   /** Fit the map view to a `[west, south, east, north]` bounding box. */
   fitBounds?: (bounds: [number, number, number, number]) => void;
   /** Return the raw MapLibre map instance (e.g. to read the current extent). */
@@ -271,7 +326,9 @@ export interface GeoLibreAppAPI<TControl extends GeoLibreControl = GeoLibreContr
  *
  * @typeParam TControl - The plugin's concrete control type.
  */
-export interface GeoLibrePlugin<TControl extends GeoLibreControl = GeoLibreControl> {
+export interface GeoLibrePlugin<
+  TControl extends GeoLibreControl = GeoLibreControl,
+> {
   /** Stable plugin id; must match `plugin.json`'s `id`. */
   id: string;
   /** Display name; must match `plugin.json`'s `name`. */

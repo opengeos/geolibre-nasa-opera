@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildingsInFlood,
+  dedupeOvertureFeatures,
   pointInGeometry,
   pointInRing,
+  transportationInFlood,
   waterAreaKm2,
   waterBBox,
   type GeoFeatureCollection,
@@ -20,7 +22,11 @@ import {
   fetchOsmBuildings,
 } from "../src/lib/opera/buildings";
 import { resolveNewsProxyEndpoint, searchNews } from "../src/lib/opera/news";
-import { bboxWidthKm, buildOnePagerHtml, scaleBar } from "../src/lib/opera/one-pager";
+import {
+  bboxWidthKm,
+  buildOnePagerHtml,
+  scaleBar,
+} from "../src/lib/opera/one-pager";
 
 // A 1x1 degree square around [0,0].
 const square: PolygonGeometry = {
@@ -41,7 +47,10 @@ const waterFC: GeoFeatureCollection = {
   features: [{ type: "Feature", geometry: square, properties: {} }],
 };
 
-function buildingAt(lon: number, lat: number): GeoFeatureCollection["features"][number] {
+function buildingAt(
+  lon: number,
+  lat: number,
+): GeoFeatureCollection["features"][number] {
   const d = 0.001;
   return {
     type: "Feature",
@@ -88,19 +97,82 @@ describe("geometry", () => {
     expect(result.fraction).toBeCloseTo(2 / 3, 5);
     expect(result.floodedAreaKm2).toBeGreaterThan(0);
   });
+
+  it("deduplicates Overture fragments by stable feature id", () => {
+    const small = buildingAt(0.5, 0.5);
+    const large = buildingAt(0.5, 0.5);
+    (small.properties ??= {})._overture_id = "building-1";
+    (large.properties ??= {})._overture_id = "building-1";
+    const coordinates = (large.geometry as PolygonGeometry).coordinates[0];
+    coordinates[0] = [0.4, 0.4];
+    coordinates[1] = [0.6, 0.4];
+    coordinates[2] = [0.6, 0.6];
+    coordinates[3] = [0.4, 0.6];
+    coordinates[4] = [0.4, 0.4];
+
+    const result = dedupeOvertureFeatures({
+      type: "FeatureCollection",
+      features: [small, large],
+    });
+
+    expect(result.features).toHaveLength(1);
+    expect(result.features[0]).toBe(large);
+  });
+
+  it("clips transportation centerlines to the flood extent", () => {
+    const transportation: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: { _overture_id: "road-1", subtype: "road" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-0.5, 0.5],
+              [1.5, 0.5],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: { _overture_id: "rail-1", subtype: "rail" },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [-0.5, 2],
+              [1.5, 2],
+            ],
+          },
+        },
+      ],
+    };
+
+    const result = transportationInFlood(transportation, waterFC);
+
+    expect(result.total).toBe(2);
+    expect(result.impactedCount).toBe(1);
+    expect(result.bySubtype).toEqual({ road: 1 });
+    expect(result.impactedLengthKm).toBeGreaterThan(110);
+    expect(result.impactedLengthKm).toBeLessThan(112);
+    expect(result.impactedFeatures).toHaveLength(1);
+  });
 });
 
 describe("benchmark", () => {
   it("normalizeWater accepts geometry, feature, and collection", () => {
     expect(normalizeWater(square).features).toHaveLength(1);
     expect(
-      normalizeWater({ type: "Feature", geometry: square, properties: {} }).features,
+      normalizeWater({ type: "Feature", geometry: square, properties: {} })
+        .features,
     ).toHaveLength(1);
     expect(normalizeWater(waterFC).features).toHaveLength(1);
   });
 
   it("normalizeWater rejects non-polygon input", () => {
-    expect(() => normalizeWater({ type: "Point", coordinates: [0, 0] })).toThrow();
+    expect(() =>
+      normalizeWater({ type: "Point", coordinates: [0, 0] }),
+    ).toThrow();
     expect(() => normalizeWater("nope")).toThrow();
   });
 
@@ -155,10 +227,13 @@ describe("buildings / Overpass", () => {
   });
 
   it("fetchOsmBuildings uses the injected fetch and first endpoint", async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(JSON.stringify({ elements: [] }), { status: 200 }),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ elements: [] }), { status: 200 }),
     );
-    const fc = await fetchOsmBuildings([0, 0, 1, 1], { fetchImpl: fetchImpl as never });
+    const fc = await fetchOsmBuildings([0, 0, 1, 1], {
+      fetchImpl: fetchImpl as never,
+    });
     expect(fc.features).toHaveLength(0);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -172,26 +247,29 @@ describe("news", () => {
   });
 
   it("searchNews throws when no endpoint is configured", async () => {
-    await expect(searchNews("x", { endpoint: "" })).rejects.toThrow(/not configured/i);
+    await expect(searchNews("x", { endpoint: "" })).rejects.toThrow(
+      /not configured/i,
+    );
   });
 
   it("searchNews normalizes Tavily results", async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          answer: "Summary",
-          results: [
-            {
-              title: "Deaths rise",
-              url: "https://www.reuters.com/world/x",
-              content: "224 people died",
-              published_date: "2024-11-01",
-            },
-            { title: "no url" },
-          ],
-        }),
-        { status: 200 },
-      ),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            answer: "Summary",
+            results: [
+              {
+                title: "Deaths rise",
+                url: "https://www.reuters.com/world/x",
+                content: "224 people died",
+                published_date: "2024-11-01",
+              },
+              { title: "no url" },
+            ],
+          }),
+          { status: 200 },
+        ),
     );
     const out = await searchNews("Valencia flood deaths", {
       endpoint: "https://news.example.com",
@@ -218,10 +296,29 @@ describe("one-pager", () => {
   it("builds a self-contained HTML doc with impacts and citations", () => {
     const html = buildOnePagerHtml({
       title: "Valencia DANA: OPERA flood assessment",
-      event: { name: "Valencia DANA", location: "Valencia, Spain", date: "2024-10-29" },
+      event: {
+        name: "Valencia DANA",
+        location: "Valencia, Spain",
+        date: "2024-10-29",
+      },
       narrative: "Heavy rain caused severe urban flooding.",
-      benchmark: { bbox: [-0.5, 39.3, -0.2, 39.6], areaKm2: 42.5, render: { label: "Flood water" } },
-      buildings: { floodedCount: 1200, total: 8000, fraction: 0.15, source: "OSM" },
+      benchmark: {
+        bbox: [-0.5, 39.3, -0.2, 39.6],
+        areaKm2: 42.5,
+        render: { label: "Flood water" },
+      },
+      buildings: {
+        floodedCount: 1200,
+        total: 8000,
+        fraction: 0.15,
+        source: "OSM",
+      },
+      population: { totalPopulation: 125000, year: 2020, source: "WorldPop" },
+      transportation: {
+        impactedSegmentCount: 220,
+        impactedLengthKm: 32.4,
+        source: "Overture Maps",
+      },
       impacts: [
         {
           claim: "Fatalities",
@@ -237,6 +334,8 @@ describe("one-pager", () => {
     expect(html).toContain("Valencia DANA");
     expect(html).toContain("https://www.reuters.com/x");
     expect(html).toContain("1,200"); // building count formatted
+    expect(html).toContain("125,000");
+    expect(html).toContain("32.4 km");
     expect(html).toContain("window.print()");
   });
 

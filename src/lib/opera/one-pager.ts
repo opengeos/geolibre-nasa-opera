@@ -39,6 +39,20 @@ export interface OnePagerBuildings {
   source?: string;
 }
 
+/** WorldPop modeled population within the flood extent. */
+export interface OnePagerPopulation {
+  totalPopulation: number;
+  year: number;
+  source?: string;
+}
+
+/** Overture transportation exposure within the flood extent. */
+export interface OnePagerTransportation {
+  impactedSegmentCount: number;
+  impactedLengthKm: number;
+  source?: string;
+}
+
 export interface OnePagerInput {
   title: string;
   event: BenchmarkEvent;
@@ -47,6 +61,8 @@ export interface OnePagerInput {
   mapImageDataUrl?: string;
   benchmark: { bbox: BBox; areaKm2: number; render: BenchmarkRender };
   buildings?: OnePagerBuildings;
+  population?: OnePagerPopulation;
+  transportation?: OnePagerTransportation;
   impacts?: OnePagerImpact[];
   /** ISO timestamp; supplied by the caller so this module stays clock-free. */
   generatedAt?: string;
@@ -94,7 +110,12 @@ function legendSvg(render: BenchmarkRender): string {
   const classes =
     render.classes && render.classes.length > 0
       ? render.classes
-      : [{ label: render.label ?? "Flood water", color: render.fillColor ?? "#2b7fff" }];
+      : [
+          {
+            label: render.label ?? "Flood water",
+            color: render.fillColor ?? "#2b7fff",
+          },
+        ];
   const rowH = 18;
   const height = classes.length * rowH + 8;
   const rows = classes
@@ -147,6 +168,28 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
              ? ` · ${buildings.floodedAreaKm2.toFixed(2)} km² footprint`
              : ""
          }${buildings.source ? ` · ${htmlEscape(buildings.source)}` : ""}</div>
+       </div>`
+    : "";
+  const population = input.population;
+  const populationBlock = population
+    ? `<div class="exposure">
+         <div class="exposure-value">${Math.round(population.totalPopulation).toLocaleString()}</div>
+         <div class="exposure-label">modeled residents within the flood extent</div>
+         <div class="exposure-sub">WorldPop ${population.year}${
+           population.source ? ` · ${htmlEscape(population.source)}` : ""
+         } · not a displacement count</div>
+       </div>`
+    : "";
+  const transportation = input.transportation;
+  const transportationBlock = transportation
+    ? `<div class="exposure">
+         <div class="exposure-value">${transportation.impactedLengthKm.toFixed(1)} km</div>
+         <div class="exposure-label">transportation centerline within the flood extent</div>
+         <div class="exposure-sub">${transportation.impactedSegmentCount.toLocaleString()} Overture segment(s)${
+           transportation.source
+             ? ` · ${htmlEscape(transportation.source)}`
+             : ""
+         }</div>
        </div>`
     : "";
   const impacts = input.impacts ?? [];
@@ -223,7 +266,7 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
         ${narrative}
       </div>
       <div class="panel map">
-        <h2>QAed flood extent (benchmark)</h2>
+        <h2>Flood extent (benchmark)</h2>
         <div class="map-wrap">
           ${mapBlock}
           <div class="legend"><div class="legend-title">${htmlEscape(input.benchmark.render.label ?? "Flood water extent")}</div>${legendSvg(input.benchmark.render)}</div>
@@ -237,6 +280,8 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
       <div class="panel impact-panel">
         <h2>Impacts</h2>
         ${buildingsBlock}
+        ${populationBlock}
+        ${transportationBlock}
         ${impactsBlock}
       </div>
     </div>

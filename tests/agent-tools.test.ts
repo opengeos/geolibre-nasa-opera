@@ -24,17 +24,27 @@ describe("OPERA agent tools", () => {
       "titiler_cmr_point_query",
       "titiler_cmr_statistics",
       "titiler_cmr_timeseries_tilejson",
+      "map_disaster_context",
+      "sentinel2_event_imagery",
       "get_benchmark",
       "derive_flood_benchmark",
       "buildings_in_flood",
+      "overture_in_flood",
+      "population_in_flood",
       "news_impact_search",
       "build_one_pager",
     ]);
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("search_and_display_opera");
-    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("detect_opera_change_between_dates");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "detect_opera_change_between_dates",
+    );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("analyze_opera_time_series");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("OPERA_L3_DSWX-HLS_V1");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("benchmark");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("map_disaster_context");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("sentinel2_event_imagery");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("overture_in_flood");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("population_in_flood");
   });
 
   it("gates benchmark tools when no control is active", () => {
@@ -49,7 +59,21 @@ describe("OPERA agent tools", () => {
 
   it("forwards benchmark workflow inputs to the control", async () => {
     const control = {
-      getBenchmarkForAgent: vi.fn(() => ({ ok: true, status: "Benchmark locked" })),
+      getBenchmarkForAgent: vi.fn(() => ({
+        ok: true,
+        status: "Benchmark locked",
+      })),
+      mapDisasterContextForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Mapped disaster context.",
+        hazard: "earthquake",
+        overtureContextActivated: true,
+      })),
+      sentinel2ImageryForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Added Sentinel-2 imagery.",
+        provider: "Microsoft Planetary Computer / Copernicus Sentinel-2",
+      })),
       buildingsInFloodForAgent: vi.fn(async () => ({
         ok: true,
         status: "Found 5 building(s) within the flood extent.",
@@ -57,6 +81,31 @@ describe("OPERA agent tools", () => {
         floodedCount: 5,
         fraction: 0.25,
         source: "OpenStreetMap (Overpass)",
+      })),
+      overtureInFloodForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Mapped Overture exposure.",
+        contextPluginActivated: true,
+        buildings: {
+          total: 20,
+          floodedCount: 5,
+          fraction: 0.25,
+          source: "Overture Maps",
+        },
+        transportation: {
+          candidateSegments: 8,
+          impactedSegmentCount: 8,
+          impactedLengthKm: 12.5,
+          bySubtype: { road: 8 },
+          source: "Overture Maps",
+        },
+      })),
+      populationInFloodForAgent: vi.fn(async () => ({
+        ok: true,
+        status: "Calculated population exposure.",
+        totalPopulation: 1250,
+        year: 2020,
+        source: "WorldPop",
       })),
       newsImpactSearchForAgent: vi.fn(async () => ({
         ok: true,
@@ -74,32 +123,109 @@ describe("OPERA agent tools", () => {
       _callback: (input: Record<string, unknown>) => Promise<unknown>;
     }>;
 
-    await tools.find((t) => t.name === "buildings_in_flood")!._callback({
-      add_layer: true,
-      compute_area: true,
+    await tools
+      .find((t) => t.name === "map_disaster_context")!
+      ._callback({
+        hazard: "earthquake",
+        event_name: "Test event",
+        bbox: [-1, -2, 3, 4],
+        population_year: 2020,
+        add_population_layer: true,
+      });
+    expect(control.mapDisasterContextForAgent).toHaveBeenCalledWith({
+      hazard: "earthquake",
+      eventName: "Test event",
+      bbox: [-1, -2, 3, 4],
+      populationYear: 2020,
+      addPopulationLayer: true,
     });
+
+    await tools
+      .find((t) => t.name === "sentinel2_event_imagery")!
+      ._callback({
+        bbox: [-1, -2, 3, 4],
+        start: "2024-10-29",
+        end: "2024-11-05",
+        max_cloud_cover: 25,
+        opacity: 0.8,
+      });
+    expect(control.sentinel2ImageryForAgent).toHaveBeenCalledWith({
+      bbox: [-1, -2, 3, 4],
+      start: "2024-10-29",
+      end: "2024-11-05",
+      maxCloudCover: 25,
+      opacity: 0.8,
+    });
+
+    await tools
+      .find((t) => t.name === "buildings_in_flood")!
+      ._callback({
+        add_layer: true,
+        compute_area: true,
+      });
     expect(control.buildingsInFloodForAgent).toHaveBeenCalledWith({
       buildingSource: undefined,
       addLayer: true,
       computeArea: true,
     });
 
-    await tools.find((t) => t.name === "news_impact_search")!._callback({
-      query: "Valencia flood deaths",
-      max_results: 5,
+    await tools
+      .find((t) => t.name === "overture_in_flood")!
+      ._callback({
+        add_layers: true,
+        compute_building_area: true,
+        max_tiles: 256,
+        max_features: 50_000,
+      });
+    expect(control.overtureInFloodForAgent).toHaveBeenCalledWith({
+      addLayers: true,
+      computeBuildingArea: true,
+      maxTiles: 256,
+      maxFeatures: 50_000,
     });
+
+    await tools
+      .find((t) => t.name === "population_in_flood")!
+      ._callback({
+        year: 2020,
+        add_layer: true,
+      });
+    expect(control.populationInFloodForAgent).toHaveBeenCalledWith({
+      year: 2020,
+      addLayer: true,
+    });
+
+    await tools
+      .find((t) => t.name === "news_impact_search")!
+      ._callback({
+        query: "Valencia flood deaths",
+        max_results: 5,
+      });
     expect(control.newsImpactSearchForAgent).toHaveBeenCalledWith({
       query: "Valencia flood deaths",
       maxResults: 5,
     });
 
-    await tools.find((t) => t.name === "build_one_pager")!._callback({
-      title: "Valencia DANA",
-      impacts: [
-        { claim: "Fatalities", value: "224", source_url: "https://example.com/a", date: "2024-11" },
-      ],
-      buildings: { flooded_count: 5, total: 20, fraction: 0.25 },
-    });
+    await tools
+      .find((t) => t.name === "build_one_pager")!
+      ._callback({
+        title: "Valencia DANA",
+        impacts: [
+          {
+            claim: "Fatalities",
+            value: "224",
+            source_url: "https://example.com/a",
+            date: "2024-11",
+          },
+        ],
+        buildings: { flooded_count: 5, total: 20, fraction: 0.25 },
+        population: { total_population: 1250, year: 2020, source: "WorldPop" },
+        transportation: {
+          impacted_segment_count: 8,
+          impacted_length_km: 12.5,
+          source: "Overture Maps",
+        },
+      });
     const onePagerArg = control.buildOnePagerForAgent.mock.calls[0][0];
     expect(onePagerArg.title).toBe("Valencia DANA");
     expect(onePagerArg.impacts[0]).toMatchObject({
@@ -108,6 +234,14 @@ describe("OPERA agent tools", () => {
       sourceUrl: "https://example.com/a",
     });
     expect(onePagerArg.buildings).toMatchObject({ floodedCount: 5, total: 20 });
+    expect(onePagerArg.population).toMatchObject({
+      totalPopulation: 1250,
+      year: 2020,
+    });
+    expect(onePagerArg.transportation).toMatchObject({
+      impactedSegmentCount: 8,
+      impactedLengthKm: 12.5,
+    });
   });
 
   it("does not return the one-pager HTML to the agent (avoids flooding context)", async () => {

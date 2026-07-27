@@ -11,6 +11,14 @@ export type {
   OperaAgentChangeResult,
   OperaAgentDerivedLayer,
   OperaAgentDisplayParams,
+  OperaAgentDisasterContextParams,
+  OperaAgentDisasterContextResult,
+  OperaAgentOvertureParams,
+  OperaAgentOvertureResult,
+  OperaAgentPopulationParams,
+  OperaAgentPopulationResult,
+  OperaAgentSentinel2Params,
+  OperaAgentSentinel2Result,
   OperaAgentReportParams,
   OperaAgentReportResult,
   OperaAgentResult,
@@ -59,7 +67,13 @@ export {
   type BenchmarkRender,
   type BenchmarkSummary,
 } from "./lib/opera/benchmark";
-export { buildingsInFlood, waterBBox, waterAreaKm2 } from "./lib/opera/geometry";
+export {
+  buildingsInFlood,
+  dedupeOvertureFeatures,
+  transportationInFlood,
+  waterBBox,
+  waterAreaKm2,
+} from "./lib/opera/geometry";
 export { fetchOsmBuildings } from "./lib/opera/buildings";
 export {
   deriveFloodExtent,
@@ -69,9 +83,30 @@ export {
 } from "./lib/opera/flood-extent";
 export { searchNews, type NewsResult } from "./lib/opera/news";
 export {
+  fetchWorldPopPopulation,
+  worldPopImageUrl,
+  WORLDPOP_DATASET,
+  WORLDPOP_LATEST_YEAR,
+  WORLDPOP_STATS_ENDPOINT,
+  WORLDPOP_IMAGE_ENDPOINT,
+  type WorldPopPopulationOptions,
+  type WorldPopPopulationResult,
+} from "./lib/opera/population";
+export {
+  fetchSentinel2Scene,
+  PLANETARY_COMPUTER_DATA_API,
+  PLANETARY_COMPUTER_STAC_SEARCH,
+  SENTINEL_2_COLLECTION,
+  type Sentinel2SceneOptions,
+  type Sentinel2SceneResult,
+  type Sentinel2SceneSearch,
+} from "./lib/opera/satellite-imagery";
+export {
   buildOnePagerHtml,
   type OnePagerInput,
   type OnePagerImpact,
+  type OnePagerPopulation,
+  type OnePagerTransportation,
 } from "./lib/opera/one-pager";
 export type {
   BBox,
@@ -93,6 +128,10 @@ export type {
   GeoLibreNativeLayerRegistration,
   GeoLibreNativeLayerStyle,
   GeoLibreFeatureCollection,
+  GeoLibreGeometry,
+  GeoLibreOvertureQuery,
+  GeoLibreOvertureQueryResult,
+  GeoLibreOvertureTheme,
 } from "./lib/geolibre/host-api";
 
 // Utility exports
