@@ -110,6 +110,20 @@ describe("WorldPop", () => {
     expect(result.totalPopulation).toBe(73);
   });
 
+  it("normalizes malformed extracted JSON errors", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('{"status": invalid}<br>warning', { status: 200 }),
+    );
+
+    await expect(
+      fetchWorldPopPopulation(area, {
+        fetchImpl: fetchImpl as never,
+        arcGisEndpoint: false,
+      }),
+    ).rejects.toThrow("WorldPop returned invalid JSON.");
+  });
+
   it("aborts a stalled WorldPop request", async () => {
     const fetchImpl = vi.fn(
       (_input: RequestInfo | URL, init?: RequestInit) =>

@@ -3,6 +3,7 @@ import type { GeoFeature, GeoFeatureCollection } from "./geometry";
 
 const PORTAL = "https://gis.earthdata.nasa.gov/portal";
 const SHARING = `${PORTAL}/sharing/rest`;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 export type DisasterSourceRole =
   | "hazard"
@@ -220,7 +221,76 @@ export function defaultAuthoritativeSources(
   hazard: string,
 ): AuthoritativeDisasterSource[] {
   const normalized = normalizeDisasterHazard(hazard);
-  return [...(HAZARD_SOURCES[normalized] ?? []), ...COMMON_SOURCES];
+  const hazardSources = Object.prototype.hasOwnProperty.call(
+    HAZARD_SOURCES,
+    normalized,
+  )
+    ? HAZARD_SOURCES[normalized]
+    : [];
+  return [...hazardSources, ...COMMON_SOURCES];
+}
+
+async function fetchWithTimeout(
+  fetcher: typeof fetch,
+  input: RequestInfo | URL,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetcher(input, { signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw Object.assign(
+        new Error(
+          `NASA disaster request timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`,
+        ),
+        { cause: error },
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function groupMatchesEvent(
+  group: ArcGisGroup,
+  params: { hazard: string; place: string; start: string; end: string },
+): boolean {
+  if (!group.id || !group.title) return false;
+  const title = group.title.toLowerCase();
+  const placeTokens = params.place
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 3);
+  const placeMatches = placeTokens.some((token) => title.includes(token));
+  const normalized = normalizeDisasterHazard(params.hazard);
+  const hazardPattern =
+    normalized === "wildfire"
+      ? /\b(?:fire|fires|wildfire|wildfires|burn)\b/
+      : normalized === "earthquake"
+        ? /\b(?:earthquake|quake|seismic)\b/
+        : normalized === "storm"
+          ? /\b(?:storm|hurricane|typhoon|cyclone)\b/
+          : normalized === "landslide"
+            ? /\b(?:landslide|mudslide|debris flow)\b/
+            : normalized === "volcano"
+              ? /\b(?:volcano|volcanic|eruption)\b/
+              : new RegExp(`\\b${escapeRegExp(normalized)}\\b`);
+  const yearsInTitle = title.match(/\b(?:19|20)\d{2}\b/g) ?? [];
+  const requestedYears = new Set([
+    params.start.slice(0, 4),
+    params.end.slice(0, 4),
+  ]);
+  const yearMatches =
+    yearsInTitle.length === 0 ||
+    yearsInTitle.some((year) => requestedYears.has(year));
+  return placeMatches && hazardPattern.test(title) && yearMatches;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function eventSearchQueries(
@@ -258,30 +328,47 @@ function eventSearchQueries(
 export async function discoverNasaDisasterEvent(
   params: { hazard: string; place: string; start: string; end: string },
   fetcher: typeof fetch = fetch,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<NasaDisasterEvent | null> {
   let group: ArcGisGroup | undefined;
+  let lastError: unknown;
+  let completedSearch = false;
   for (const query of eventSearchQueries(
     params.hazard,
     params.place,
     params.start,
     params.end,
   )) {
-    const groupsUrl = `${SHARING}/community/groups?f=json&num=20&q=${encodeURIComponent(query)}`;
-    const groupsResponse = await fetcher(groupsUrl);
-    if (!groupsResponse.ok) {
-      throw new Error(`NASA event search failed (${groupsResponse.status}).`);
+    try {
+      const groupsUrl = `${SHARING}/community/groups?f=json&num=20&q=${encodeURIComponent(query)}`;
+      const groupsResponse = await fetchWithTimeout(
+        fetcher,
+        groupsUrl,
+        requestTimeoutMs,
+      );
+      if (!groupsResponse.ok) {
+        throw new Error(`NASA event search failed (${groupsResponse.status}).`);
+      }
+      completedSearch = true;
+      const groups =
+        (await groupsResponse.json()) as ArcGisSearchResponse<ArcGisGroup>;
+      group = groups.results?.find((candidate) =>
+        groupMatchesEvent(candidate, params),
+      );
+      if (group) break;
+    } catch (error) {
+      lastError = error;
     }
-    const groups =
-      (await groupsResponse.json()) as ArcGisSearchResponse<ArcGisGroup>;
-    group = groups.results?.find(
-      (candidate) => candidate.id && candidate.title,
-    );
-    if (group) break;
   }
+  if (!group && !completedSearch && lastError) throw lastError;
   if (!group?.id || !group.title) return null;
 
   const itemsUrl = `${SHARING}/content/groups/${encodeURIComponent(group.id)}/search?f=json&num=100&sortField=added&sortOrder=desc`;
-  const itemsResponse = await fetcher(itemsUrl);
+  const itemsResponse = await fetchWithTimeout(
+    fetcher,
+    itemsUrl,
+    requestTimeoutMs,
+  );
   if (!itemsResponse.ok)
     throw new Error(`NASA event catalog failed (${itemsResponse.status}).`);
   const payload =
@@ -353,7 +440,10 @@ export function rankNasaDisasterItems(
     return termScore + (item.type === "Web Map" ? 20 : 0);
   };
   return [...items]
-    .filter((item) => score(item) > 0)
+    .filter((item) => {
+      const text = `${item.title} ${item.tags.join(" ")}`.toLowerCase();
+      return terms.some((term) => text.includes(term));
+    })
     .sort((a, b) => score(b) - score(a));
 }
 
@@ -361,9 +451,12 @@ export function rankNasaDisasterItems(
 export async function fetchVisibleWebMapLayers(
   itemId: string,
   fetcher: typeof fetch = fetch,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<ArcGisOperationalLayer[]> {
-  const response = await fetcher(
+  const response = await fetchWithTimeout(
+    fetcher,
     `${SHARING}/content/items/${encodeURIComponent(itemId)}/data?f=json`,
+    requestTimeoutMs,
   );
   if (!response.ok)
     throw new Error(`NASA Web Map ${itemId} failed (${response.status}).`);
@@ -396,6 +489,7 @@ export async function queryArcGisGeoJson(
   start: string,
   end: string,
   fetcher: typeof fetch = fetch,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<GeoFeatureCollection> {
   const layerUrl = /\/(Feature|Map)Server\/\d+$/i.test(serviceUrl)
     ? serviceUrl
@@ -412,18 +506,36 @@ export async function queryArcGisGeoJson(
     returnGeometry: "true",
     time: `${Date.parse(`${start}T00:00:00Z`)},${Date.parse(`${end}T23:59:59Z`)}`,
   });
-  const response = await fetcher(`${layerUrl}/query?${params.toString()}`);
+  const response = await fetchWithTimeout(
+    fetcher,
+    `${layerUrl}/query?${params.toString()}`,
+    requestTimeoutMs,
+  );
   if (!response.ok)
     throw new Error(`ArcGIS hazard query failed (${response.status}).`);
   const data = (await response.json()) as GeoFeatureCollection & {
     error?: { message?: string };
+    exceededTransferLimit?: boolean;
   };
   if (data.error)
     throw new Error(data.error.message || "ArcGIS hazard query failed.");
   if (data.type !== "FeatureCollection" || !Array.isArray(data.features)) {
     throw new Error("ArcGIS hazard query did not return GeoJSON.");
   }
+  if (data.exceededTransferLimit) {
+    throw new Error(
+      "ArcGIS hazard query was truncated; narrow the AOI or use a paginated service query.",
+    );
+  }
   return data;
+}
+
+function fedsObservationTime(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
+  if (typeof value !== "string" || !value.trim()) return NaN;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  return Date.parse(value);
 }
 
 /** Keep the most recent observation for each FEDS fire id. */
@@ -434,10 +546,16 @@ export function latestFedsPerimeters(
   for (const feature of data.features) {
     const properties = feature.properties ?? {};
     const id = String(properties.fireid ?? properties.primarykey ?? "unknown");
-    const time = Number(properties.t ?? 0);
+    const time = fedsObservationTime(properties.t);
     const previous = latest.get(id);
-    const previousTime = Number(previous?.properties?.t ?? 0);
-    if (!previous || time >= previousTime) latest.set(id, feature);
+    const previousTime = fedsObservationTime(previous?.properties?.t);
+    if (
+      !previous ||
+      (Number.isFinite(time) &&
+        (!Number.isFinite(previousTime) || time >= previousTime))
+    ) {
+      latest.set(id, feature);
+    }
   }
   return { type: "FeatureCollection", features: [...latest.values()] };
 }

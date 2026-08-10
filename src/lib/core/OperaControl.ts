@@ -114,6 +114,8 @@ export interface OperaState {
   endpoint: string;
   /** Precise user-drawn AOI used by composite agent workflows. */
   agentAoiBBox?: BBox;
+  /** Hazard represented by the persisted locked analysis extent. */
+  hazard?: string;
   /**
    * The human-QAed flood benchmark locked as the agent's authoritative
    * boundary. Persisted with the project so a locked benchmark survives reloads.
@@ -784,7 +786,12 @@ export class OperaControl implements IControl {
    * and not restored automatically, so re-add it when the control (re)mounts.
    */
   private _restoreBenchmarkLayer(): void {
-    if (this._state.benchmark) this._addBenchmarkLayer(this._state.benchmark);
+    if (this._state.benchmark) {
+      this._benchmarkHazard = normalizeDisasterHazard(
+        this._state.hazard ?? "flood",
+      );
+      this._addBenchmarkLayer(this._state.benchmark);
+    }
   }
 
   onRemove(): void {
@@ -1544,8 +1551,7 @@ export class OperaControl implements IControl {
     rawGeoJson: unknown,
     event: BenchmarkEvent,
     render?: BenchmarkRender,
-    hazard = "flood",
-    addLayer = true,
+    options: { hazard?: string; addLayer?: boolean } = {},
   ): OperaAgentBenchmarkResult {
     let benchmark: LockedBenchmark;
     try {
@@ -1559,9 +1565,10 @@ export class OperaControl implements IControl {
       this._setStatus(status);
       return { ok: false, status };
     }
-    this._benchmarkHazard = normalizeDisasterHazard(hazard);
+    this._benchmarkHazard = normalizeDisasterHazard(options.hazard ?? "flood");
     this._state.benchmark = benchmark;
-    if (addLayer) this._addBenchmarkLayer(benchmark);
+    this._state.hazard = this._benchmarkHazard;
+    if (options.addLayer !== false) this._addBenchmarkLayer(benchmark);
     this._options.fitBounds?.(benchmark.bbox);
     this._updateBenchmarkStatus();
     const status = `Locked benchmark "${benchmark.event.name}" (${benchmark.areaKm2.toFixed(2)} km²).`;
@@ -1572,6 +1579,7 @@ export class OperaControl implements IControl {
   /** Remove the locked benchmark. */
   clearBenchmark(): void {
     this._state.benchmark = undefined;
+    this._state.hazard = undefined;
     this._benchmarkHazard = "flood";
     this._updateBenchmarkStatus();
     this._setStatus("Benchmark cleared.");
@@ -2112,8 +2120,8 @@ export class OperaControl implements IControl {
       const population = await fetchWorldPopPopulation(benchmark.water, {
         year,
         requestTimeoutMs: 10_000,
-        maxPolls: 1,
-        pollIntervalMs: 500,
+        maxPolls: 3,
+        pollIntervalMs: 1_000,
       });
       const rounded = Math.round(population.totalPopulation);
       const status =
@@ -2291,7 +2299,7 @@ export class OperaControl implements IControl {
 
     const ranked = rankNasaDisasterItems(params.hazard, event.items);
     const normalized = normalizeDisasterHazard(params.hazard);
-    const selected =
+    const selectedCandidates =
       normalized === "wildfire"
         ? [
             ranked.find((item) =>
@@ -2305,6 +2313,9 @@ export class OperaControl implements IControl {
             ),
           ].filter((item): item is NonNullable<typeof item> => Boolean(item))
         : ranked.slice(0, 3);
+    const selected = [
+      ...new Map(selectedCandidates.map((item) => [item.id, item])).values(),
+    ];
     const curatedExtent = selected.find((item) =>
       /exceedance|burn severity|damage|hazard/i.test(item.title),
     )?.extent;
@@ -2343,6 +2354,12 @@ export class OperaControl implements IControl {
             if (progression.features.length === 0) {
               warnings.push(
                 `NASA FEDS returned no fire perimeters in the event window.`,
+              );
+              continue;
+            }
+            if (hazardExtent) {
+              warnings.push(
+                `Skipped an additional FEDS perimeter layer after selecting the first usable observed extent.`,
               );
               continue;
             }
@@ -2393,11 +2410,18 @@ export class OperaControl implements IControl {
               params.end,
             );
             if (data.features.length === 0) continue;
+            const geometry = geoJsonImpactGeometry(data);
+            if (!geometry) {
+              warnings.push(
+                `${layer.title}: no supported point, line, or polygon geometry was returned.`,
+              );
+              continue;
+            }
             const id = this._addStyledGeoJsonImpactLayer({
               id: `nasa-disaster-${slug(item.id)}-${layerIndex}-${slug(layer.title)}`,
               name: layer.title,
               data,
-              geometry: "fill",
+              geometry,
               color: "#e11d48",
               opacity: 0.3,
               strokeColor: "#9f1239",
@@ -2415,7 +2439,7 @@ export class OperaControl implements IControl {
 
         if (/\/(?:Map|Image)Server$/i.test(layer.url)) {
           const id = `nasa-disaster-${slug(item.id)}-${layerIndex}-${slug(layer.title)}`;
-          this._registerLayer({
+          const registered = this._registerLayer({
             id,
             name: layer.title,
             type: "raster",
@@ -2435,7 +2459,9 @@ export class OperaControl implements IControl {
               serviceUrl: layer.url,
             },
           });
-          layerIds.push(id);
+          if (registered) layerIds.push(id);
+          else
+            warnings.push(`${layer.title}: failed to register raster layer.`);
         }
       }
     }
@@ -2452,7 +2478,8 @@ export class OperaControl implements IControl {
   async mapDisasterEventForAgent(
     params: OperaAgentDisasterEventParams,
   ): Promise<OperaAgentDisasterEventResult> {
-    const hazard = normalizeDisasterHazard(params.hazard);
+    const rawHazard = params.hazard?.trim();
+    const hazard = rawHazard ? normalizeDisasterHazard(rawHazard) : "";
     const warnings: string[] = [];
     if (!hazard) {
       return {
@@ -2614,13 +2641,15 @@ export class OperaControl implements IControl {
             label: `${authoritative.event?.title ?? "NASA"} observed ${hazard} extent`,
             fillColor: "#dc2626",
           },
-          hazard,
-          false,
+          { hazard, addLayer: false },
         );
         if (lock.ok) {
-          bbox = lock.benchmark?.bbox ?? bbox;
-          this._options.fitBounds?.(bbox);
+          const focusBBox = lock.benchmark?.bbox
+            ? expandAndClipBBox(lock.benchmark.bbox, bbox)
+            : bbox;
+          this._options.fitBounds?.(focusBBox);
           overture = await this.overtureInFloodForAgent({
+            bbox: focusBBox,
             addLayers: true,
             computeBuildingArea: true,
             maxFeatures: 250_000,
@@ -3092,7 +3121,7 @@ export class OperaControl implements IControl {
     id: string;
     name: string;
     data: GeoFeatureCollection;
-    geometry: "fill" | "line";
+    geometry: "fill" | "line" | "point";
     color: string;
     opacity: number;
     strokeColor?: string;
@@ -3108,7 +3137,9 @@ export class OperaControl implements IControl {
     const nativeLayerIds =
       options.geometry === "fill"
         ? [`${options.id}-fill`, `${options.id}-outline`]
-        : [`${options.id}-line`];
+        : options.geometry === "line"
+          ? [`${options.id}-line`]
+          : [`${options.id}-circle`];
     this._removeManagedMapLayer(options.id, nativeLayerIds, sourceId);
     map.addSource(sourceId, {
       type: "geojson",
@@ -3134,7 +3165,7 @@ export class OperaControl implements IControl {
           "line-width": options.strokeWidth,
         },
       });
-    } else {
+    } else if (options.geometry === "line") {
       map.addLayer({
         id: nativeLayerIds[0],
         type: "line",
@@ -3143,6 +3174,19 @@ export class OperaControl implements IControl {
           "line-color": options.color,
           "line-opacity": options.opacity,
           "line-width": options.strokeWidth,
+        },
+      });
+    } else {
+      map.addLayer({
+        id: nativeLayerIds[0],
+        type: "circle",
+        source: sourceId,
+        paint: {
+          "circle-color": options.color,
+          "circle-opacity": options.opacity,
+          "circle-radius": Math.max(3, options.strokeWidth * 2),
+          "circle-stroke-color": options.strokeColor ?? options.color,
+          "circle-stroke-width": 1,
         },
       });
     }
@@ -3159,6 +3203,10 @@ export class OperaControl implements IControl {
         fillOpacity: options.geometry === "fill" ? options.opacity : 0,
         strokeColor: options.strokeColor ?? options.color,
         strokeWidth: options.strokeWidth,
+        circleRadius:
+          options.geometry === "point"
+            ? Math.max(3, options.strokeWidth * 2)
+            : undefined,
       },
       metadata: {
         sourceKind: options.sourceKind ?? "opera-disaster-impact",
@@ -3240,14 +3288,16 @@ export class OperaControl implements IControl {
       .layers?.find((layer) => vectorTypes.has(layer.type))?.id;
   }
 
-  private _registerLayer(layer: GeoLibreNativeLayerRegistration): void {
+  private _registerLayer(layer: GeoLibreNativeLayerRegistration): boolean {
     try {
       this._options.registerLayer?.(layer);
       if (!this._registeredLayerIds.includes(layer.id)) {
         this._registeredLayerIds.push(layer.id);
       }
+      return true;
     } catch {
       this._setStatus("Failed to add layer.");
+      return false;
     }
   }
 
@@ -5223,6 +5273,25 @@ function label(text: string): HTMLElement {
 
 function slug(value: string): string {
   return value.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function geoJsonImpactGeometry(
+  data: GeoFeatureCollection,
+): "fill" | "line" | "point" | undefined {
+  const types = new Set(
+    data.features
+      .map((feature) => {
+        const geometry = feature.geometry;
+        if (!geometry || typeof geometry !== "object" || !("type" in geometry))
+          return undefined;
+        return (geometry as { type?: unknown }).type;
+      })
+      .filter((type): type is string => typeof type === "string"),
+  );
+  if (types.has("Polygon") || types.has("MultiPolygon")) return "fill";
+  if (types.has("LineString") || types.has("MultiLineString")) return "line";
+  if (types.has("Point") || types.has("MultiPoint")) return "point";
+  return undefined;
 }
 
 /** Expand a curated product extent slightly and clip it to the requested AOI. */

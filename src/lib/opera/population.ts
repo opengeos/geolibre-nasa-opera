@@ -104,7 +104,11 @@ async function readResponse(response: Response): Promise<WorldPopResponse> {
     }
     if (start < 0 || end < 0)
       throw new Error("WorldPop returned invalid JSON.");
-    body = JSON.parse(text.slice(start, end)) as WorldPopResponse;
+    try {
+      body = JSON.parse(text.slice(start, end)) as WorldPopResponse;
+    } catch {
+      throw new Error("WorldPop returned invalid JSON.");
+    }
   }
   const error = responseError(body);
   if (error) throw new Error(error);
