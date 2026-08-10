@@ -717,4 +717,125 @@ describe("disaster impact control", () => {
       expect.objectContaining({ bbox: drawnAoi }),
     );
   });
+
+  it("uses the default NASA FEDS extent for wildfire exposure", async () => {
+    const registerLayer = vi.fn();
+    const geocodePlace = vi.fn(async () => ({
+      bbox: [-109.1, 37, -102, 41] as [number, number, number, number],
+      displayName: "Colorado, United States",
+    }));
+    const discoverDisasterEvent = vi.fn(async () => ({
+      groupId: "colorado-fire-group",
+      title: "Colorado Fires July 2026",
+      portalUrl:
+        "https://gis.earthdata.nasa.gov/portal/home/group.html?id=colorado-fire-group",
+      items: [
+        {
+          id: "feds-web-map",
+          title: "Fire Events Data Suite (FEDS) Web Map",
+          type: "Web Map",
+          portalUrl:
+            "https://gis.earthdata.nasa.gov/portal/home/item.html?id=feds-web-map",
+          tags: ["NASA", "Wildfire"],
+        },
+      ],
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              operationalLayers: [
+                {
+                  title: "FEDS Fire Perimeters",
+                  url: "https://example.com/feds/MapServer",
+                  layerType: "ArcGISMapServiceLayer",
+                },
+              ],
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: { fireid: 59297, t: 100 },
+                  geometry: water.features[0].geometry,
+                },
+              ],
+            }),
+          ),
+        ),
+    );
+    const fitBounds = vi.fn();
+    const control = new OperaControl({
+      registerLayer,
+      geocodePlace,
+      discoverDisasterEvent,
+      fitBounds,
+    });
+    const { map } = mapStub();
+    control.renderDocked(document.createElement("div"), map as never);
+    vi.spyOn(control, "sentinel2ImageryForAgent").mockResolvedValue({
+      ok: true,
+      status: "Added imagery.",
+      provider: "Sentinel-2",
+    });
+    vi.spyOn(control, "overtureInFloodForAgent").mockResolvedValue({
+      ok: true,
+      status: "Calculated wildfire exposure.",
+      contextPluginActivated: true,
+      layerIds: ["buildings", "roads"],
+      buildings: {
+        total: 10,
+        floodedCount: 2,
+        fraction: 0.2,
+        source: "Overture Maps",
+      },
+      transportation: {
+        candidateSegments: 4,
+        impactedSegmentCount: 1,
+        impactedLengthKm: 3,
+        bySubtype: { road: 1 },
+        source: "Overture Maps roads",
+      },
+    });
+    vi.spyOn(control, "populationInFloodForAgent").mockResolvedValue({
+      ok: true,
+      status: "Calculated population exposure.",
+      totalPopulation: 500,
+      year: 2020,
+      source: "WorldPop",
+    });
+
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "fire",
+      place: "Colorado",
+      start: "2026-06-19",
+      end: "2026-07-23",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.hazard).toBe("wildfire");
+    expect(result.nasaEvent?.groupId).toBe("colorado-fire-group");
+    expect(result.sources?.slice(0, 3).map((source) => source.id)).toEqual([
+      "nasa-feds",
+      "burn-severity",
+      "opera-dist",
+    ]);
+    expect(result.authoritativeLayerIds).toHaveLength(2);
+    expect(result.bbox).toEqual([0, 0, 1, 1]);
+    expect(control.overtureInFloodForAgent).toHaveBeenCalledWith({
+      addLayers: true,
+      computeBuildingArea: true,
+      maxFeatures: 250_000,
+    });
+    expect(result.status).toContain("calculated exposure");
+    expect(fitBounds).toHaveBeenLastCalledWith([0, 0, 1, 1]);
+  });
 });

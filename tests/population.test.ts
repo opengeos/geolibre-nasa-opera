@@ -85,6 +85,30 @@ describe("WorldPop", () => {
     expect(sleep).toHaveBeenCalledWith(1000);
   });
 
+  it("accepts valid JSON followed by WorldPop server warning markup", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          `${JSON.stringify({ status: "created", taskid: "task-warning" })}<br><b>Warning</b>: server diagnostic`,
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          `${JSON.stringify({ status: "finished", total_population: 73 })}<br>warning`,
+          { status: 200 },
+        ),
+      );
+
+    const result = await fetchWorldPopPopulation(area, {
+      fetchImpl: fetchImpl as never,
+      sleep: async () => undefined,
+    });
+
+    expect(result.totalPopulation).toBe(73);
+  });
+
   it("aborts a stalled WorldPop request", async () => {
     const fetchImpl = vi.fn(
       (_input: RequestInfo | URL, init?: RequestInit) =>

@@ -13,6 +13,8 @@ export type {
   OperaAgentDisplayParams,
   OperaAgentDisasterContextParams,
   OperaAgentDisasterContextResult,
+  OperaAgentDisasterEventParams,
+  OperaAgentDisasterEventResult,
   OperaAgentOvertureParams,
   OperaAgentOvertureResult,
   OperaAgentPopulationParams,
@@ -26,6 +28,22 @@ export type {
   OperaAgentTimeSeriesParams,
   OperaAgentTimeSeriesResult,
 } from "./lib/core/OperaControl";
+
+export {
+  arcGisExportTileUrl,
+  defaultAuthoritativeSources,
+  discoverNasaDisasterEvent,
+  fetchVisibleWebMapLayers,
+  latestFedsPerimeters,
+  normalizeDisasterHazard,
+  queryArcGisGeoJson,
+  rankNasaDisasterItems,
+  type ArcGisOperationalLayer,
+  type AuthoritativeDisasterSource,
+  type DisasterSourceRole,
+  type NasaDisasterEvent,
+  type NasaDisasterItem,
+} from "./lib/opera/disaster-sources";
 
 // OPERA data layer
 export { OPERA_PRODUCTS, getProduct } from "./lib/opera/products";

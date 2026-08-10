@@ -37,16 +37,16 @@ Earthdata authentication and Cloud-Optimized GeoTIFF reads server-side.
 
 ### Supported products
 
-| short_name | label |
-| --- | --- |
-| `OPERA_L3_DSWX-HLS_V1` | DSWX-HLS — surface water from HLS |
-| `OPERA_L3_DSWX-S1_V1` | DSWX-S1 — surface water from Sentinel-1 |
-| `OPERA_L3_DIST-ALERT-HLS_V1` | DIST-ALERT — near-real-time disturbance |
-| `OPERA_L3_DIST-ANN-HLS_V1` | DIST-ANN — annual disturbance |
-| `OPERA_L2_RTC-S1_V1` | RTC-S1 — terrain-corrected SAR backscatter |
-| `OPERA_L2_RTC-S1-STATIC_V1` | RTC-S1 static layers |
-| `OPERA_L2_CSLC-S1_V1` | CSLC-S1 — coregistered single-look complex |
-| `OPERA_L2_CSLC-S1-STATIC_V1` | CSLC-S1 static layers |
+| short_name                   | label                                      |
+| ---------------------------- | ------------------------------------------ |
+| `OPERA_L3_DSWX-HLS_V1`       | DSWX-HLS — surface water from HLS          |
+| `OPERA_L3_DSWX-S1_V1`        | DSWX-S1 — surface water from Sentinel-1    |
+| `OPERA_L3_DIST-ALERT-HLS_V1` | DIST-ALERT — near-real-time disturbance    |
+| `OPERA_L3_DIST-ANN-HLS_V1`   | DIST-ANN — annual disturbance              |
+| `OPERA_L2_RTC-S1_V1`         | RTC-S1 — terrain-corrected SAR backscatter |
+| `OPERA_L2_RTC-S1-STATIC_V1`  | RTC-S1 static layers                       |
+| `OPERA_L2_CSLC-S1_V1`        | CSLC-S1 — coregistered single-look complex |
+| `OPERA_L2_CSLC-S1-STATIC_V1` | CSLC-S1 static layers                      |
 
 ## How it works
 
@@ -177,7 +177,11 @@ The NASA OPERA plugin registers OPERA-specific agent tools:
   for temporal rasterio/xarray workflows.
 - `map_disaster_event` runs the standard disaster workflow from only a hazard,
   place or AOI, and event dates. Flood requests add grouped pre/post OPERA and
-  Sentinel-2 layers, Overture context and impacts, and WorldPop exposure.
+  Sentinel-2 layers, Overture context and impacts, and WorldPop exposure. When
+  the user does not name sources, it applies a deterministic, hazard-specific
+  authoritative source policy. Wildfires prioritize the matching NASA
+  Disasters event, FEDS perimeters, NASA burn-severity products, and OPERA DIST
+  before calculating exposure.
 - `map_disaster_context` maps the existing GeoLibre Overture building and
   transportation layers plus WorldPop population for any disaster AOI.
 - `sentinel2_event_imagery` searches the public Microsoft Planetary Computer
@@ -252,7 +256,20 @@ bundled and the panel falls back to manual key entry.
 
 For a location and event date or date range, `map_disaster_event` runs the
 standard workflow without requiring the user to name datasets or analysis
-steps. Flood requests create separate pre/post OPERA and Sentinel-2 layer
+steps. The default source order is an authoritative hazard observation,
+corroborating satellite change, Overture buildings and transportation,
+WorldPop modeled population, then attributable official reports or news. The
+result keeps observed hazard, modeled exposure, and confirmed impacts separate.
+
+For wildfires, the tool searches NASA Earthdata GIS for the matching curated
+NASA Disasters event group. It adds only visible, relevant layers from FEDS,
+burn-severity, and OPERA DIST Web Maps. When a time-filtered FEDS perimeter is
+available, the latest perimeter for each fire becomes the exposure boundary and
+Overture and WorldPop queries are narrowed to that event extent. If a perimeter
+or exposure service is unavailable, the workflow reports that limitation and
+does not label general context as impact.
+
+Flood requests create separate pre/post OPERA and Sentinel-2 layer
 groups, map all Overture buildings and typed transportation in the requested
 AOI, highlight flooded buildings and affected roads, and calculate open-access
 WorldPop exposure. Contextual assets and optical imagery are not labeled as
@@ -267,11 +284,11 @@ human-QAed flood map, into interactive analysis layers and a shareable one-pager
      date range and it calls `derive_flood_benchmark`: it searches OPERA DSWx-HLS
      for the AOI + dates, renders the observed open/partial surface water, and
      **vectorizes it** into a flood polygon that is locked as the working
-     benchmark. This extent is *OPERA-observed, not human-QAed* and is labeled as
+     benchmark. This extent is _OPERA-observed, not human-QAed_ and is labeled as
      such on the one-pager.
    - **Import a QAed benchmark (authoritative).** In the OPERA panel's **Flood
      benchmark** section, import a QAed flood water-extent GeoJSON
-     (`Polygon`/`MultiPolygon`). It is *locked* as the authoritative ground truth
+     (`Polygon`/`MultiPolygon`). It is _locked_ as the authoritative ground truth
      and drawn on the map. A sample placeholder is at
      [`examples/sample-benchmark-valencia.geojson`](examples/sample-benchmark-valencia.geojson).
      When a QAed benchmark is locked, the agent uses it instead of deriving one.

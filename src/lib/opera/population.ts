@@ -61,7 +61,38 @@ async function readResponse(response: Response): Promise<WorldPopResponse> {
       `WorldPop request failed (${response.status} ${response.statusText}).`,
     );
   }
-  const body = (await response.json()) as WorldPopResponse;
+  const text = await response.text();
+  let body: WorldPopResponse;
+  try {
+    body = JSON.parse(text) as WorldPopResponse;
+  } catch {
+    // The public WorldPop service occasionally appends PHP warning markup to
+    // an otherwise valid JSON response. Preserve the valid API payload instead
+    // of failing the complete exposure workflow on server-side diagnostics.
+    const start = text.indexOf("{");
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let index = start; index >= 0 && index < text.length; index += 1) {
+      const character = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}" && --depth === 0) {
+        end = index + 1;
+        break;
+      }
+    }
+    if (start < 0 || end < 0)
+      throw new Error("WorldPop returned invalid JSON.");
+    body = JSON.parse(text.slice(start, end)) as WorldPopResponse;
+  }
   const error = responseError(body);
   if (error) throw new Error(error);
   return body;
