@@ -832,6 +832,9 @@ describe("disaster impact control", () => {
               ],
             }),
           ),
+        )
+        .mockResolvedValue(
+          new Response(JSON.stringify({ operationalLayers: [] })),
         ),
     );
     const fitBounds = vi.fn();
@@ -925,9 +928,10 @@ describe("disaster impact control", () => {
       }),
     );
     const restored = new OperaControl({ queryOvertureFeatures });
-    restored.setState(state);
+    restored.setState({ ...state, hazard: "flood" });
     const { map } = mapStub();
     restored.renderDocked(document.createElement("div"), map as never);
+    restored.setState({ hazard: "wildfire" });
 
     const result = await restored.overtureInFloodForAgent({ addLayers: false });
     expect(result.status).toContain("wildfire extent");
@@ -979,6 +983,9 @@ describe("disaster impact control", () => {
               ],
             }),
           ),
+        )
+        .mockResolvedValue(
+          new Response(JSON.stringify({ operationalLayers: [] })),
         ),
     );
     const control = new OperaControl({

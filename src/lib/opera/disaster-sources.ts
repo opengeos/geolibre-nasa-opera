@@ -230,15 +230,17 @@ export function defaultAuthoritativeSources(
   return [...hazardSources, ...COMMON_SOURCES];
 }
 
-async function fetchWithTimeout(
+async function fetchJsonWithTimeout<T>(
   fetcher: typeof fetch,
   input: RequestInfo | URL,
   timeoutMs: number,
-): Promise<Response> {
+): Promise<{ ok: boolean; status: number; data?: T }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(input, { signal: controller.signal });
+    const response = await fetcher(input, { signal: controller.signal });
+    const data = response.ok ? ((await response.json()) as T) : undefined;
+    return { ok: response.ok, status: response.status, data };
   } catch (error) {
     if (controller.signal.aborted) {
       throw Object.assign(
@@ -332,7 +334,6 @@ export async function discoverNasaDisasterEvent(
 ): Promise<NasaDisasterEvent | null> {
   let group: ArcGisGroup | undefined;
   let lastError: unknown;
-  let completedSearch = false;
   for (const query of eventSearchQueries(
     params.hazard,
     params.place,
@@ -341,18 +342,13 @@ export async function discoverNasaDisasterEvent(
   )) {
     try {
       const groupsUrl = `${SHARING}/community/groups?f=json&num=20&q=${encodeURIComponent(query)}`;
-      const groupsResponse = await fetchWithTimeout(
-        fetcher,
-        groupsUrl,
-        requestTimeoutMs,
-      );
+      const groupsResponse = await fetchJsonWithTimeout<
+        ArcGisSearchResponse<ArcGisGroup>
+      >(fetcher, groupsUrl, requestTimeoutMs);
       if (!groupsResponse.ok) {
         throw new Error(`NASA event search failed (${groupsResponse.status}).`);
       }
-      completedSearch = true;
-      const groups =
-        (await groupsResponse.json()) as ArcGisSearchResponse<ArcGisGroup>;
-      group = groups.results?.find((candidate) =>
+      group = groupsResponse.data?.results?.find((candidate) =>
         groupMatchesEvent(candidate, params),
       );
       if (group) break;
@@ -360,19 +356,16 @@ export async function discoverNasaDisasterEvent(
       lastError = error;
     }
   }
-  if (!group && !completedSearch && lastError) throw lastError;
+  if (!group && lastError) throw lastError;
   if (!group?.id || !group.title) return null;
 
   const itemsUrl = `${SHARING}/content/groups/${encodeURIComponent(group.id)}/search?f=json&num=100&sortField=added&sortOrder=desc`;
-  const itemsResponse = await fetchWithTimeout(
-    fetcher,
-    itemsUrl,
-    requestTimeoutMs,
-  );
+  const itemsResponse = await fetchJsonWithTimeout<
+    ArcGisSearchResponse<ArcGisItem>
+  >(fetcher, itemsUrl, requestTimeoutMs);
   if (!itemsResponse.ok)
     throw new Error(`NASA event catalog failed (${itemsResponse.status}).`);
-  const payload =
-    (await itemsResponse.json()) as ArcGisSearchResponse<ArcGisItem>;
+  const payload = itemsResponse.data ?? {};
   const items = (payload.results ?? [])
     .filter(
       (
@@ -453,16 +446,16 @@ export async function fetchVisibleWebMapLayers(
   fetcher: typeof fetch = fetch,
   requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<ArcGisOperationalLayer[]> {
-  const response = await fetchWithTimeout(
+  const response = await fetchJsonWithTimeout<{
+    operationalLayers?: ArcGisLayerNode[];
+  }>(
     fetcher,
     `${SHARING}/content/items/${encodeURIComponent(itemId)}/data?f=json`,
     requestTimeoutMs,
   );
   if (!response.ok)
     throw new Error(`NASA Web Map ${itemId} failed (${response.status}).`);
-  const data = (await response.json()) as {
-    operationalLayers?: ArcGisLayerNode[];
-  };
+  const data = response.data ?? {};
   const flattened: ArcGisOperationalLayer[] = [];
   const visit = (nodes: ArcGisLayerNode[], parentVisible: boolean): void => {
     for (const node of nodes) {
@@ -506,17 +499,16 @@ export async function queryArcGisGeoJson(
     returnGeometry: "true",
     time: `${Date.parse(`${start}T00:00:00Z`)},${Date.parse(`${end}T23:59:59Z`)}`,
   });
-  const response = await fetchWithTimeout(
-    fetcher,
-    `${layerUrl}/query?${params.toString()}`,
-    requestTimeoutMs,
-  );
+  const response = await fetchJsonWithTimeout<
+    GeoFeatureCollection & {
+      error?: { message?: string };
+      exceededTransferLimit?: boolean;
+    }
+  >(fetcher, `${layerUrl}/query?${params.toString()}`, requestTimeoutMs);
   if (!response.ok)
     throw new Error(`ArcGIS hazard query failed (${response.status}).`);
-  const data = (await response.json()) as GeoFeatureCollection & {
-    error?: { message?: string };
-    exceededTransferLimit?: boolean;
-  };
+  const data = response.data;
+  if (!data) throw new Error("ArcGIS hazard query returned no response body.");
   if (data.error)
     throw new Error(data.error.message || "ArcGIS hazard query failed.");
   if (data.type !== "FeatureCollection" || !Array.isArray(data.features)) {

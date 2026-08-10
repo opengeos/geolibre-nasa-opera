@@ -10,7 +10,10 @@
  * `titiler.ts` resolves its endpoint (build var / global / override).
  */
 
-/** Build-time override: `VITE_NEWS_PROXY_ENDPOINT`. Runtime global below. */
+/**
+ * Endpoint precedence: explicit override, window global, Docker deployment
+ * environment, then the `VITE_NEWS_PROXY_ENDPOINT` build variable.
+ */
 const NEWS_PROXY_GLOBAL = "GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT";
 
 export function resolveNewsProxyEndpoint(override?: string): string {
@@ -38,11 +41,15 @@ function readGlobal(): string | undefined {
 }
 
 function readDeploymentEnv(): string | undefined {
-  return (
+  const deployment = (
     globalThis as typeof globalThis & {
       __GEOLIBRE_DEPLOYMENT_ENV__?: Record<string, string | undefined>;
     }
-  ).__GEOLIBRE_DEPLOYMENT_ENV__?.VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT;
+  ).__GEOLIBRE_DEPLOYMENT_ENV__;
+  return (
+    deployment?.GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT ??
+    deployment?.VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT
+  );
 }
 
 function readBuildEnv(): string | undefined {

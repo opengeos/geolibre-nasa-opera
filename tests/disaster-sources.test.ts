@@ -273,6 +273,16 @@ describe("authoritative disaster sources", () => {
     );
   });
 
+  it("reports a late fallback failure when earlier searches found no match", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ results: [] })))
+      .mockRejectedValue(new Error("late network failure"));
+    await expect(
+      discoverNasaDisasterEvent(eventParams, fetcher),
+    ).rejects.toThrow("late network failure");
+  });
+
   it("builds a bounded ArcGIS GeoJSON query", async () => {
     const fetcher = vi.fn(
       async () =>
@@ -323,6 +333,24 @@ describe("authoritative disaster sources", () => {
             reject(new DOMException("Aborted", "AbortError")),
           );
         }),
+    );
+    await expect(
+      fetchVisibleWebMapLayers("web-map", fetcher, 5),
+    ).rejects.toThrow("timed out");
+  });
+
+  it("keeps the timeout active while reading a NASA response body", async () => {
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              init?.signal?.addEventListener("abort", () =>
+                controller.error(new DOMException("Aborted", "AbortError")),
+              );
+            },
+          }),
+        ),
     );
     await expect(
       fetchVisibleWebMapLayers("web-map", fetcher, 5),

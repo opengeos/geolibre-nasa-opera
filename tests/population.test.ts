@@ -29,6 +29,13 @@ const area: GeoFeatureCollection = {
   ],
 };
 
+function signedRingArea(ring: number[][]): number {
+  return ring.reduce((sum, current, index) => {
+    const next = ring[(index + 1) % ring.length];
+    return sum + current[0] * next[1] - next[0] * current[1];
+  }, 0);
+}
+
 describe("WorldPop", () => {
   it("posts a synchronous polygon statistics request", async () => {
     const fetchImpl = vi.fn(
@@ -144,6 +151,52 @@ describe("WorldPop", () => {
   });
 
   it("falls back to ArcGIS polygon statistics", async () => {
+    const polygonWithHoleAndMultiPolygon: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [0, 0],
+                [4, 0],
+                [4, 4],
+                [0, 4],
+                [0, 0],
+              ],
+              [
+                [1, 1],
+                [1, 2],
+                [2, 2],
+                [2, 1],
+                [1, 1],
+              ],
+            ],
+          },
+        },
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "MultiPolygon",
+            coordinates: [
+              [
+                [
+                  [10, 10],
+                  [12, 10],
+                  [12, 12],
+                  [10, 12],
+                  [10, 10],
+                ],
+              ],
+            ],
+          },
+        },
+      ],
+    };
     const fetchImpl = vi
       .fn()
       .mockRejectedValueOnce(new Error("legacy service unavailable"))
@@ -154,9 +207,12 @@ describe("WorldPop", () => {
         ),
       );
 
-    const result = await fetchWorldPopPopulation(area, {
-      fetchImpl: fetchImpl as never,
-    });
+    const result = await fetchWorldPopPopulation(
+      polygonWithHoleAndMultiPolygon,
+      {
+        fetchImpl: fetchImpl as never,
+      },
+    );
 
     expect(result).toMatchObject({
       totalPopulation: 384.9889950079895,
@@ -168,10 +224,17 @@ describe("WorldPop", () => {
     const form = new URLSearchParams(String(init?.body));
     expect(form.get("geometryType")).toBe("esriGeometryPolygon");
     expect(form.get("time")).toBe(String(Date.UTC(2020, 0, 1)));
-    expect(JSON.parse(form.get("geometry") ?? "{}")).toMatchObject({
-      rings: area.features[0].geometry.coordinates,
+    const geometry = JSON.parse(form.get("geometry") ?? "{}") as {
+      rings: number[][][];
+      spatialReference: { wkid: number };
+    };
+    expect(geometry).toMatchObject({
       spatialReference: { wkid: 4326 },
     });
+    expect(geometry.rings).toHaveLength(3);
+    expect(signedRingArea(geometry.rings[0])).toBeLessThan(0);
+    expect(signedRingArea(geometry.rings[1])).toBeGreaterThan(0);
+    expect(signedRingArea(geometry.rings[2])).toBeLessThan(0);
   });
 
   it("builds a transparent, styled population image URL", () => {

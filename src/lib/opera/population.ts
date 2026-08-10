@@ -147,15 +147,35 @@ function arcGisPolygonGeometry(water: GeoFeatureCollection): {
   rings: Position[][];
   spatialReference: { wkid: 4326 };
 } {
-  const rings = areaGeometries(water).flatMap((geometry) =>
-    geometry.type === "Polygon"
-      ? geometry.coordinates
-      : geometry.coordinates.flatMap((polygon) => polygon),
-  );
+  const rings = areaGeometries(water).flatMap((geometry) => {
+    const polygons =
+      geometry.type === "Polygon"
+        ? [geometry.coordinates]
+        : geometry.coordinates;
+    return polygons.flatMap((polygon) =>
+      polygon.map((ring, index) => orientArcGisRing(ring, index === 0)),
+    );
+  });
   if (rings.length === 0) {
     throw new Error("WorldPop exposure geometry contains no polygon rings.");
   }
   return { rings, spatialReference: { wkid: 4326 } };
+}
+
+function orientArcGisRing(ring: Position[], exterior: boolean): Position[] {
+  let signedArea = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const current = ring[index];
+    const next = ring[(index + 1) % ring.length];
+    signedArea += current[0] * next[1] - next[0] * current[1];
+  }
+  const clockwise = signedArea < 0;
+  const coordinates = ring.map(
+    (position): Position => [position[0], position[1]],
+  );
+  return signedArea !== 0 && clockwise !== exterior
+    ? coordinates.reverse()
+    : coordinates;
 }
 
 async function fetchArcGisPopulation(

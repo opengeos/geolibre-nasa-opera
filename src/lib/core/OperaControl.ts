@@ -701,7 +701,9 @@ export class OperaControl implements IControl {
   private _lastStatus = "";
   private _lastChangeResult?: OperaAgentChangeResult;
   /** Hazard represented by the current locked analysis extent. */
-  private _benchmarkHazard = "flood";
+  private get _benchmarkHazard(): string {
+    return normalizeDisasterHazard(this._state.hazard ?? "flood");
+  }
 
   private _granules: OperaGranule[] = [];
   // Current displayed (sorted) order of the results table.
@@ -787,9 +789,6 @@ export class OperaControl implements IControl {
    */
   private _restoreBenchmarkLayer(): void {
     if (this._state.benchmark) {
-      this._benchmarkHazard = normalizeDisasterHazard(
-        this._state.hazard ?? "flood",
-      );
       this._addBenchmarkLayer(this._state.benchmark);
     }
   }
@@ -1565,9 +1564,8 @@ export class OperaControl implements IControl {
       this._setStatus(status);
       return { ok: false, status };
     }
-    this._benchmarkHazard = normalizeDisasterHazard(options.hazard ?? "flood");
     this._state.benchmark = benchmark;
-    this._state.hazard = this._benchmarkHazard;
+    this._state.hazard = normalizeDisasterHazard(options.hazard ?? "flood");
     if (options.addLayer !== false) this._addBenchmarkLayer(benchmark);
     this._options.fitBounds?.(benchmark.bbox);
     this._updateBenchmarkStatus();
@@ -1580,7 +1578,6 @@ export class OperaControl implements IControl {
   clearBenchmark(): void {
     this._state.benchmark = undefined;
     this._state.hazard = undefined;
-    this._benchmarkHazard = "flood";
     this._updateBenchmarkStatus();
     this._setStatus("Benchmark cleared.");
   }

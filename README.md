@@ -346,6 +346,10 @@ npm run news-proxy:deploy      # or: npm run news-proxy:dev  (local, port 8788)
 Point the plugin at a standalone Worker with the `VITE_NEWS_PROXY_ENDPOINT`
 build variable, the `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` window global, or
 GeoLibre's `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` Docker variable.
+At runtime, the plugin checks an explicit tool override first, then the window
+global, `__GEOLIBRE_DEPLOYMENT_ENV__.GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT`,
+and finally the build variable. The older deployment key
+`VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT` remains supported for compatibility.
 Without it, `news_impact_search` returns a clear "not configured" message and the
 rest of the workflow (benchmark, buildings, one-pager) still works.
 

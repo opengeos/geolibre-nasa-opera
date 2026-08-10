@@ -291,10 +291,18 @@ describe("news", () => {
 
   it("reads the Docker runtime news endpoint", () => {
     vi.stubGlobal("__GEOLIBRE_DEPLOYMENT_ENV__", {
-      VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT: "/ai/",
+      GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT: "/ai/",
     });
 
     expect(resolveNewsProxyEndpoint()).toBe("/ai");
+  });
+
+  it("supports the legacy Docker runtime news endpoint key", () => {
+    vi.stubGlobal("__GEOLIBRE_DEPLOYMENT_ENV__", {
+      VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT: "/legacy-ai/",
+    });
+
+    expect(resolveNewsProxyEndpoint()).toBe("/legacy-ai");
   });
 
   it("searchNews throws when no endpoint is configured", async () => {
