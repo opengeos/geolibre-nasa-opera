@@ -17,6 +17,7 @@ export function resolveNewsProxyEndpoint(override?: string): string {
   return (
     clean(override) ||
     clean(readGlobal()) ||
+    clean(readDeploymentEnv()) ||
     clean(readBuildEnv()) ||
     ""
   );
@@ -34,6 +35,14 @@ function readGlobal(): string | undefined {
   return (globalThis as Record<string, unknown>)[NEWS_PROXY_GLOBAL] as
     | string
     | undefined;
+}
+
+function readDeploymentEnv(): string | undefined {
+  return (
+    globalThis as typeof globalThis & {
+      __GEOLIBRE_DEPLOYMENT_ENV__?: Record<string, string | undefined>;
+    }
+  ).__GEOLIBRE_DEPLOYMENT_ENV__?.VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT;
 }
 
 function readBuildEnv(): string | undefined {
@@ -104,12 +113,15 @@ export async function searchNews(
   if (!endpoint) {
     throw new Error(
       "News proxy is not configured. Set VITE_NEWS_PROXY_ENDPOINT (or the " +
-        "GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT global) to the deployed news Worker URL.",
+        "GeoLibre Docker news proxy runtime setting) to the deployed news Worker URL.",
     );
   }
   const doFetch = options.fetchImpl ?? fetch;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 25000);
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? 25000,
+  );
   try {
     const response = await doFetch(`${endpoint}/tavily`, {
       method: "POST",
@@ -134,7 +146,9 @@ export async function searchNews(
     }
     const data = (await response.json()) as TavilyResponse;
     const results: NewsResult[] = (data.results ?? [])
-      .filter((r): r is TavilyResult & { url: string } => typeof r.url === "string")
+      .filter(
+        (r): r is TavilyResult & { url: string } => typeof r.url === "string",
+      )
       .map((r) => ({
         title: r.title ?? "",
         sourceUrl: r.url,

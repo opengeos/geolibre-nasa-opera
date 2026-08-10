@@ -331,6 +331,8 @@ export interface OperaAgentTileLayerParams {
   fitBounds?: boolean;
   /** Restrict the raster source to these bounds. */
   bounds?: BBox;
+  /** Insert this raster beneath an existing native MapLibre layer. */
+  beforeId?: string;
 }
 
 /** Result of `getBenchmarkForAgent` / benchmark-gated tools. */
@@ -1132,6 +1134,7 @@ export class OperaControl implements IControl {
           : {}),
       },
       nativeLayerIds: [],
+      beforeId: params.beforeId,
       opacity: params.opacity ?? 1,
       metadata: params.metadata,
     });
@@ -2840,6 +2843,7 @@ export class OperaControl implements IControl {
         opacity: Math.max(0, Math.min(1, params.opacity ?? 0.78)),
         fitBounds: false,
         bounds: bbox,
+        beforeId: this._firstVectorLayerId(),
         metadata: {
           sourceKind: "sentinel-2-event-imagery",
           provider: scene.provider,
@@ -3219,6 +3223,21 @@ export class OperaControl implements IControl {
       },
     });
     return id;
+  }
+
+  /** Return the lowest vector style layer so imagery stays below vectors. */
+  private _firstVectorLayerId(): string | undefined {
+    const vectorTypes = new Set([
+      "circle",
+      "fill",
+      "fill-extrusion",
+      "heatmap",
+      "line",
+      "symbol",
+    ]);
+    return this._map
+      ?.getStyle()
+      .layers?.find((layer) => vectorTypes.has(layer.type))?.id;
   }
 
   private _registerLayer(layer: GeoLibreNativeLayerRegistration): void {

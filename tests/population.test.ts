@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GeoFeatureCollection } from "../src/lib/opera/geometry";
 import {
   fetchWorldPopPopulation,
+  WORLDPOP_ARCGIS_STATS_ENDPOINT,
   WORLDPOP_STATS_ENDPOINT,
   worldPopImageUrl,
 } from "../src/lib/opera/population";
@@ -123,8 +124,40 @@ describe("WorldPop", () => {
       fetchWorldPopPopulation(area, {
         fetchImpl: fetchImpl as never,
         requestTimeoutMs: 5,
+        arcGisEndpoint: false,
       }),
     ).rejects.toThrow("WorldPop request timed out after 1 seconds.");
+  });
+
+  it("falls back to ArcGIS polygon statistics", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("legacy service unavailable"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ statistics: [{ sum: 384.9889950079895 }] }),
+          { status: 200 },
+        ),
+      );
+
+    const result = await fetchWorldPopPopulation(area, {
+      fetchImpl: fetchImpl as never,
+    });
+
+    expect(result).toMatchObject({
+      totalPopulation: 384.9889950079895,
+      source: expect.stringContaining("ArcGIS ImageServer"),
+    });
+    const [url, init] = fetchImpl.mock.calls[1];
+    expect(url).toBe(WORLDPOP_ARCGIS_STATS_ENDPOINT);
+    expect(init?.method).toBe("POST");
+    const form = new URLSearchParams(String(init?.body));
+    expect(form.get("geometryType")).toBe("esriGeometryPolygon");
+    expect(form.get("time")).toBe(String(Date.UTC(2020, 0, 1)));
+    expect(JSON.parse(form.get("geometry") ?? "{}")).toMatchObject({
+      rings: area.features[0].geometry.coordinates,
+      spatialReference: { wkid: 4326 },
+    });
   });
 
   it("builds a transparent, styled population image URL", () => {

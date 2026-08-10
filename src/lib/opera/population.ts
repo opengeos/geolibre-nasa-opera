@@ -1,10 +1,16 @@
-import type { GeoFeatureCollection } from "./geometry";
+import {
+  areaGeometries,
+  type GeoFeatureCollection,
+  type Position,
+} from "./geometry";
 import type { BBox } from "./types";
 
 export const WORLDPOP_STATS_ENDPOINT =
   "https://api.worldpop.org/v1/services/stats";
 export const WORLDPOP_IMAGE_ENDPOINT =
   "https://worldpop.arcgis.com/arcgis/rest/services/WorldPop_Total_Population_100m/ImageServer/exportImage";
+export const WORLDPOP_ARCGIS_STATS_ENDPOINT =
+  "https://worldpop.arcgis.com/arcgis/rest/services/WorldPop_Total_Population_100m/ImageServer/computeStatisticsHistograms";
 export const WORLDPOP_DATASET = "wpgppop";
 export const WORLDPOP_LATEST_YEAR = 2020;
 
@@ -18,6 +24,8 @@ export interface WorldPopPopulationResult {
 export interface WorldPopPopulationOptions {
   year?: number;
   endpoint?: string;
+  /** ArcGIS ImageServer fallback endpoint, or false to disable the fallback. */
+  arcGisEndpoint?: string | false;
   fetchImpl?: typeof fetch;
   /** Maximum duration of each WorldPop HTTP request. Defaults to 30 seconds. */
   requestTimeoutMs?: number;
@@ -33,6 +41,11 @@ type WorldPopResponse = {
   message?: string;
   data?: unknown;
   total_population?: unknown;
+};
+
+type ArcGisStatisticsResponse = {
+  statistics?: Array<{ sum?: unknown }>;
+  error?: { message?: string; details?: string[] };
 };
 
 function numericTotal(value: unknown): number | null {
@@ -126,6 +139,75 @@ async function fetchWithTimeout(
   }
 }
 
+function arcGisPolygonGeometry(water: GeoFeatureCollection): {
+  rings: Position[][];
+  spatialReference: { wkid: 4326 };
+} {
+  const rings = areaGeometries(water).flatMap((geometry) =>
+    geometry.type === "Polygon"
+      ? geometry.coordinates
+      : geometry.coordinates.flatMap((polygon) => polygon),
+  );
+  if (rings.length === 0) {
+    throw new Error("WorldPop exposure geometry contains no polygon rings.");
+  }
+  return { rings, spatialReference: { wkid: 4326 } };
+}
+
+async function fetchArcGisPopulation(
+  water: GeoFeatureCollection,
+  options: WorldPopPopulationOptions,
+  year: number,
+  fetchImpl: typeof fetch,
+  requestTimeoutMs: number,
+): Promise<WorldPopPopulationResult> {
+  const endpoint =
+    options.arcGisEndpoint === false
+      ? undefined
+      : (options.arcGisEndpoint ?? WORLDPOP_ARCGIS_STATS_ENDPOINT);
+  if (!endpoint) {
+    throw new Error("WorldPop ArcGIS statistics fallback is disabled.");
+  }
+  const form = new URLSearchParams({
+    f: "json",
+    geometry: JSON.stringify(arcGisPolygonGeometry(water)),
+    geometryType: "esriGeometryPolygon",
+    time: String(Date.UTC(year, 0, 1)),
+  });
+  const response = await fetchWithTimeout(
+    fetchImpl,
+    endpoint,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form,
+    },
+    requestTimeoutMs,
+  );
+  if (!response.ok) {
+    throw new Error(
+      `WorldPop ArcGIS request failed (${response.status} ${response.statusText}).`,
+    );
+  }
+  const payload = (await response.json()) as ArcGisStatisticsResponse;
+  if (payload.error) {
+    const details = payload.error.details?.filter(Boolean).join(" ");
+    throw new Error(
+      payload.error.message || details || "WorldPop ArcGIS analysis failed.",
+    );
+  }
+  const total = Number(payload.statistics?.[0]?.sum);
+  if (!Number.isFinite(total)) {
+    throw new Error("WorldPop ArcGIS did not return a population sum.");
+  }
+  return {
+    totalPopulation: total,
+    year,
+    dataset: WORLDPOP_DATASET,
+    source: "WorldPop Global Project Population Data via ArcGIS ImageServer",
+  };
+}
+
 /**
  * Sum WorldPop population within a flood polygon using the public WorldPop API.
  */
@@ -142,54 +224,87 @@ export async function fetchWorldPopPopulation(
   const fetchImpl = options.fetchImpl ?? fetch;
   const endpoint = options.endpoint ?? WORLDPOP_STATS_ENDPOINT;
   const requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 30_000);
-  const form = new URLSearchParams({
-    dataset: WORLDPOP_DATASET,
-    year: String(year),
-    runasync: "false",
-    geojson: JSON.stringify(water),
-  });
-  let payload = await readResponse(
-    await fetchWithTimeout(
-      fetchImpl,
-      endpoint,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: form,
-      },
-      requestTimeoutMs,
-    ),
-  );
-  let total = numericTotal(payload);
-  const taskId = payload.taskid;
-  if (total === null && taskId) {
-    const maxPolls = options.maxPolls ?? 30;
-    const pollIntervalMs = options.pollIntervalMs ?? 1000;
-    const sleep =
-      options.sleep ??
-      ((milliseconds: number) =>
-        new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-    const taskUrl = new URL(
-      `../tasks/${encodeURIComponent(taskId)}`,
-      endpoint,
-    ).toString();
-    for (let poll = 0; poll < maxPolls && total === null; poll += 1) {
-      await sleep(pollIntervalMs);
-      payload = await readResponse(
-        await fetchWithTimeout(fetchImpl, taskUrl, undefined, requestTimeoutMs),
+  try {
+    const form = new URLSearchParams({
+      dataset: WORLDPOP_DATASET,
+      year: String(year),
+      runasync: "false",
+      geojson: JSON.stringify(water),
+    });
+    let payload = await readResponse(
+      await fetchWithTimeout(
+        fetchImpl,
+        endpoint,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form,
+        },
+        requestTimeoutMs,
+      ),
+    );
+    let total = numericTotal(payload);
+    const taskId = payload.taskid;
+    if (total === null && taskId) {
+      const maxPolls = options.maxPolls ?? 30;
+      const pollIntervalMs = options.pollIntervalMs ?? 1000;
+      const sleep =
+        options.sleep ??
+        ((milliseconds: number) =>
+          new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+      const taskUrl = new URL(
+        `../tasks/${encodeURIComponent(taskId)}`,
+        endpoint,
+      ).toString();
+      for (let poll = 0; poll < maxPolls && total === null; poll += 1) {
+        await sleep(pollIntervalMs);
+        payload = await readResponse(
+          await fetchWithTimeout(
+            fetchImpl,
+            taskUrl,
+            undefined,
+            requestTimeoutMs,
+          ),
+        );
+        total = numericTotal(payload);
+      }
+    }
+    if (total === null) {
+      throw new Error("WorldPop did not return a population total.");
+    }
+    return {
+      totalPopulation: total,
+      year,
+      dataset: WORLDPOP_DATASET,
+      source: "WorldPop Global Project Population Data",
+    };
+  } catch (primaryError) {
+    if (options.arcGisEndpoint === false) throw primaryError;
+    try {
+      return await fetchArcGisPopulation(
+        water,
+        options,
+        year,
+        fetchImpl,
+        requestTimeoutMs,
       );
-      total = numericTotal(payload);
+    } catch (fallbackError) {
+      const primaryDetail =
+        primaryError instanceof Error
+          ? primaryError.message
+          : String(primaryError);
+      const fallbackDetail =
+        fallbackError instanceof Error
+          ? fallbackError.message
+          : String(fallbackError);
+      throw Object.assign(
+        new Error(
+          `WorldPop statistics failed (${primaryDetail}); ArcGIS fallback failed (${fallbackDetail}).`,
+        ),
+        { cause: fallbackError },
+      );
     }
   }
-  if (total === null) {
-    throw new Error("WorldPop did not return a population total.");
-  }
-  return {
-    totalPopulation: total,
-    year,
-    dataset: WORLDPOP_DATASET,
-    source: "WorldPop Global Project Population Data",
-  };
 }
 
 /**

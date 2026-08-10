@@ -92,6 +92,7 @@ function mapStub() {
     }),
     removeLayer: vi.fn((id: string) => layers.delete(id)),
     moveLayer: vi.fn(),
+    getStyle: () => ({ layers: [...layers.values()] }),
     getCanvas: () => ({ style: {} }),
     queryRenderedFeatures: vi.fn(() => []),
   };
@@ -452,6 +453,56 @@ describe("disaster impact control", () => {
         }),
       }),
     );
+  });
+
+  it("places Sentinel-2 imagery beneath vector style layers", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/stac/v1/search")) {
+          return new Response(
+            JSON.stringify({
+              features: [
+                {
+                  id: "S2_BELOW_VECTORS",
+                  bbox: [0, 0, 1, 1],
+                  properties: { datetime: "2024-11-02T10:00:00Z" },
+                  assets: {
+                    tilejson: { href: "https://tiles.example/below.json" },
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({ tiles: ["https://tiles.example/{z}/{x}/{y}.png"] }),
+          { status: 200 },
+        );
+      }),
+    );
+    const registerLayer = vi.fn();
+    const control = new OperaControl({ registerLayer });
+    const { map } = mapStub();
+    map.addLayer({ id: "basemap-raster", type: "raster" });
+    map.addLayer({ id: "roads-line", type: "line" });
+    map.addLayer({ id: "labels", type: "symbol" });
+    control.renderDocked(document.createElement("div"), map as never);
+
+    await control.sentinel2ImageryForAgent({
+      bbox: [0, 0, 1, 1],
+      start: "2024-10-29",
+      end: "2024-11-05",
+    });
+
+    expect(registerLayer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "sentinel-2-S2-BELOW-VECTORS",
+        beforeId: "roads-line",
+      }),
+    );
+    control.teardownDocked();
   });
 
   it("groups automatic pre-event Sentinel-2 imagery separately", async () => {
