@@ -75,6 +75,29 @@ function itemDatetime(item: StacItem): string {
     : "";
 }
 
+function bboxIntersectionArea(first: BBox, second: BBox): number {
+  const width = Math.max(
+    0,
+    Math.min(first[2], second[2]) - Math.max(first[0], second[0]),
+  );
+  const height = Math.max(
+    0,
+    Math.min(first[3], second[3]) - Math.max(first[1], second[1]),
+  );
+  return width * height;
+}
+
+function containsBBoxCenter(candidate: BBox, target: BBox): boolean {
+  const longitude = (target[0] + target[2]) / 2;
+  const latitude = (target[1] + target[3]) / 2;
+  return (
+    longitude >= candidate[0] &&
+    longitude <= candidate[2] &&
+    latitude >= candidate[1] &&
+    latitude <= candidate[3]
+  );
+}
+
 function tileJsonUrl(item: StacItem, itemId: string): string {
   const assetUrl = item.assets?.tilejson?.href;
   if (typeof assetUrl === "string" && assetUrl.startsWith("https://")) {
@@ -152,26 +175,45 @@ export async function fetchSentinel2Scene(
     ? (response.features as StacItem[])
     : [];
   const candidates = items
+    .map((item) => {
+      const bbox = itemBBox(item.bbox);
+      return typeof item.id === "string" &&
+        bbox &&
+        itemDatetime(item) &&
+        bboxIntersectionArea(bbox, search.bbox) > 0
+        ? { item, bbox }
+        : undefined;
+    })
     .filter(
-      (item) =>
-        typeof item.id === "string" &&
-        itemBBox(item.bbox) !== null &&
-        itemDatetime(item),
+      (
+        candidate,
+      ): candidate is {
+        item: StacItem & { id: string };
+        bbox: BBox;
+      } => candidate !== undefined,
     )
     .sort((first, second) => {
+      const centerDifference =
+        Number(containsBBoxCenter(second.bbox, search.bbox)) -
+        Number(containsBBoxCenter(first.bbox, search.bbox));
+      if (centerDifference !== 0) return centerDifference;
+      const overlapDifference =
+        bboxIntersectionArea(second.bbox, search.bbox) -
+        bboxIntersectionArea(first.bbox, search.bbox);
+      if (overlapDifference !== 0) return overlapDifference;
       const cloudDifference =
-        (itemCloudCover(first) ?? 101) - (itemCloudCover(second) ?? 101);
+        (itemCloudCover(first.item) ?? 101) -
+        (itemCloudCover(second.item) ?? 101);
       if (cloudDifference !== 0) return cloudDifference;
-      return itemDatetime(second).localeCompare(itemDatetime(first));
+      return itemDatetime(second.item).localeCompare(itemDatetime(first.item));
     });
-  const item = candidates[0];
-  if (!item || typeof item.id !== "string") {
+  const candidate = candidates[0];
+  if (!candidate) {
     throw new Error(
       `No Sentinel-2 L2A scene with at most ${maxCloudCover}% cloud cover was found in the event window.`,
     );
   }
-  const bbox = itemBBox(item.bbox);
-  if (!bbox) throw new Error("Sentinel-2 scene did not include valid bounds.");
+  const { item, bbox } = candidate;
   const tilejson = await fetchJson<TileJson>(
     fetchImpl,
     tileJsonUrl(item, item.id),

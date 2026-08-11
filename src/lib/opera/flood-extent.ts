@@ -169,10 +169,42 @@ export function traceMaskRings(
         }
       } while (edge !== start && !used.has(edge));
       if (edge === start) ring.push([start.sx, start.sy]);
-      if (ring.length >= 4) rings.push(dropCollinear(ring));
+      if (ring.length >= 4) {
+        rings.push(...splitRepeatedRingVertices(dropCollinear(ring)));
+      }
     }
   }
   return rings;
+}
+
+/**
+ * Split a closed ring wherever it revisits a vertex, producing simple loops.
+ */
+export function splitRepeatedRingVertices(ring: NodeRing): NodeRing[] {
+  if (ring.length < 4) return [];
+  const closed: NodeRing =
+    ring[0][0] === ring[ring.length - 1][0] &&
+    ring[0][1] === ring[ring.length - 1][1]
+      ? ring
+      : [...ring, [ring[0][0], ring[0][1]]];
+  const seen = new Map<string, number>();
+  for (let index = 0; index < closed.length - 1; index++) {
+    const vertexKey = key(closed[index][0], closed[index][1]);
+    const previous = seen.get(vertexKey);
+    if (previous === undefined) {
+      seen.set(vertexKey, index);
+      continue;
+    }
+    const first = closed.slice(previous, index + 1);
+    const second = [
+      ...closed.slice(0, previous + 1),
+      ...closed.slice(index + 1),
+    ];
+    return [first, second].flatMap((candidate) =>
+      candidate.length >= 4 ? splitRepeatedRingVertices(candidate) : [],
+    );
+  }
+  return [closed];
 }
 
 /** Remove interior points that are collinear with their neighbours. */
@@ -260,37 +292,67 @@ export function maskToFeatureCollection(
     .map((r) => r.map(([nx, ny]) => project(nx, ny)))
     .filter((r) => r.length >= 4);
 
-  // Split into outer rings and holes by even-odd containment, then assemble.
-  type R = { ring: Position[]; area: number; abs: number };
+  // Build an even-odd containment hierarchy so nested water islands become
+  // separate shells rather than invalid holes inside holes.
+  type R = {
+    ring: Position[];
+    area: number;
+    abs: number;
+    parent: number;
+    depth: number;
+  };
   const items: R[] = rings.map((ring) => {
     const area = signedArea(ring);
-    return { ring, area, abs: Math.abs(area) };
+    return {
+      ring,
+      area,
+      abs: Math.abs(area),
+      parent: -1,
+      depth: 0,
+    };
   });
   items.sort((a, b) => b.abs - a.abs); // largest first
 
-  const outers: { ring: Position[]; holes: Position[][] }[] = [];
-  for (const it of items) {
-    // A ring is a hole if a representative vertex sits inside an existing outer.
-    const probe = it.ring[0];
-    const container = outers.find((o) => pointInRingLL(probe, o.ring));
-    if (container && !outers.some((o) => o.ring === it.ring)) {
-      container.holes.push(it.ring);
-    } else {
-      outers.push({ ring: it.ring, holes: [] });
+  for (let index = 0; index < items.length; index += 1) {
+    let parentArea = Number.POSITIVE_INFINITY;
+    for (let candidate = 0; candidate < index; candidate += 1) {
+      if (
+        items[candidate].abs < parentArea &&
+        items[index].ring
+          .slice(0, -1)
+          .some((point) => pointInRingLL(point, items[candidate].ring))
+      ) {
+        items[index].parent = candidate;
+        parentArea = items[candidate].abs;
+      }
+    }
+    if (items[index].parent >= 0) {
+      items[index].depth = items[items[index].parent].depth + 1;
     }
   }
 
   const minAreaKm2 = opts.minAreaKm2 ?? 0.01;
   const features: GeoFeature[] = [];
-  for (const o of outers) {
-    if (ringAreaKm2(o.ring) < minAreaKm2) continue;
-    const exterior = ensureWinding(o.ring, true); // CCW
-    const holes = o.holes.map((h) => ensureWinding(h, false)); // CW
+  const polygonByItem = new Map<number, { coordinates: Position[][] }>();
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.depth % 2 === 1) {
+      polygonByItem
+        .get(item.parent)
+        ?.coordinates.push(ensureWinding(item.ring, false));
+      continue;
+    }
+    if (ringAreaKm2(item.ring) < minAreaKm2) continue;
+    const geometry = {
+      type: "Polygon" as const,
+      coordinates: [ensureWinding(item.ring, true)],
+    };
     features.push({
       type: "Feature",
-      geometry: { type: "Polygon", coordinates: [exterior, ...holes] },
+      geometry,
       properties: { source: "OPERA DSWx (observed water)" },
     });
+    polygonByItem.set(index, geometry);
   }
   return { type: "FeatureCollection", features };
 }
@@ -344,6 +406,50 @@ export interface DeriveFloodExtentOptions {
   loadTile?: (url: string) => Promise<RgbaImage | null>;
   /** Injectable fetch (unused by the default browser loader). */
   fetchImpl?: typeof fetch;
+}
+
+interface DownsampledMask {
+  mask: Uint8Array;
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/**
+ * Aggregate a binary mask into larger cells while retaining any observed water.
+ */
+export function downsampleBinaryMask(
+  mask: ArrayLike<number | boolean>,
+  width: number,
+  height: number,
+  requestedScale: number,
+): DownsampledMask {
+  const scale = Math.max(1, Math.floor(requestedScale));
+  if (scale === 1) {
+    return {
+      mask: mask instanceof Uint8Array ? mask : Uint8Array.from(mask, Number),
+      width,
+      height,
+      scale,
+    };
+  }
+  const sampledWidth = Math.ceil(width / scale);
+  const sampledHeight = Math.ceil(height / scale);
+  const sampled = new Uint8Array(sampledWidth * sampledHeight);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (mask[y * width + x]) {
+        sampled[Math.floor(y / scale) * sampledWidth + Math.floor(x / scale)] =
+          1;
+      }
+    }
+  }
+  return {
+    mask: sampled,
+    width: sampledWidth,
+    height: sampledHeight,
+    scale,
+  };
 }
 
 /** Run `worker` over `items` with at most `limit` in flight. */
@@ -433,16 +539,29 @@ export async function deriveFloodExtent(
     for (let py = 0; py < Math.min(TILE, img.height); py++) {
       for (let px = 0; px < Math.min(TILE, img.width); px++) {
         const a = img.data[(py * img.width + px) * 4 + 3];
-        if (a > alphaMin) mask[(oy + py) * stitchW + (ox + px)] = 1;
+        const stitchedX = ox + px;
+        const stitchedY = oy + py;
+        const globalX = originPx + stitchedX + 0.5;
+        const globalPixelY = originPy + stitchedY + 0.5;
+        if (
+          a > alphaMin &&
+          globalX >= gx0 &&
+          globalX <= gx1 &&
+          globalPixelY >= gy0 &&
+          globalPixelY <= gy1
+        ) {
+          mask[stitchedY * stitchW + stitchedX] = 1;
+        }
       }
     }
   });
 
-  return maskToFeatureCollection(mask, stitchW, stitchH, {
+  const sampled = downsampleBinaryMask(mask, stitchW, stitchH, opts.scale ?? 1);
+  return maskToFeatureCollection(sampled.mask, sampled.width, sampled.height, {
     zoom,
     originPx,
     originPy,
-    scale: opts.scale ?? 1,
+    scale: sampled.scale,
     minAreaKm2: opts.minAreaKm2 ?? 0.02,
   });
 }

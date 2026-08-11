@@ -41,6 +41,14 @@ describe("OPERA agent tools", () => {
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("analyze_opera_time_series");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("OPERA_L3_DSWX-HLS_V1");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("OPERA_L3_DSWX-S1_V1");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("3D extrusions");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "automatic background narrative",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "Never guess or infer bbox coordinates",
+    );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("benchmark");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("map_disaster_event");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("map_disaster_context");

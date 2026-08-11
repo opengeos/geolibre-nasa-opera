@@ -37,45 +37,67 @@ function signedRingArea(ring: number[][]): number {
 }
 
 describe("WorldPop", () => {
-  it("posts a synchronous polygon statistics request", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
+  it("posts a Polygon to the WorldPop v2 population endpoint", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            status: "finished",
-            data: { total_population: 1234.5 },
+            status: "pending",
+            task_id: "task-1",
+            check_url: "/v2/tasks/task-1",
           }),
           { status: 200 },
         ),
-    );
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: "success",
+            result: { total_population: 1234.5 },
+          }),
+          { status: 200 },
+        ),
+      );
 
     const result = await fetchWorldPopPopulation(area, {
       fetchImpl: fetchImpl as never,
+      sleep: async () => undefined,
     });
 
     expect(result).toMatchObject({
       totalPopulation: 1234.5,
       year: 2020,
-      dataset: "wpgppop",
+      dataset: "worldpop-global2",
     });
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe(WORLDPOP_STATS_ENDPOINT);
     expect(init?.method).toBe("POST");
-    const form = new URLSearchParams(String(init?.body));
-    expect(form.get("dataset")).toBe("wpgppop");
-    expect(form.get("year")).toBe("2020");
-    expect(JSON.parse(form.get("geojson") ?? "{}")).toEqual(area);
+    expect(init?.headers).toMatchObject({
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      geojson: area.features[0].geometry,
+      year: 2020,
+      resolution: "100m",
+    });
+    expect(fetchImpl.mock.calls[1][0]).toBe(
+      "https://api.worldpop.org/v2/tasks/task-1",
+    );
   });
 
   it("polls a task when the initial response is asynchronous", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ taskid: "task-1" }), { status: 200 }),
+        new Response(JSON.stringify({ task_id: "task-1" }), { status: 200 }),
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ status: "finished", total_population: 42 }),
+          JSON.stringify({
+            status: "success",
+            result: { total_population: 42 },
+          }),
           { status: 200 },
         ),
       );
@@ -88,7 +110,7 @@ describe("WorldPop", () => {
 
     expect(result.totalPopulation).toBe(42);
     expect(fetchImpl.mock.calls[1][0]).toBe(
-      "https://api.worldpop.org/v1/tasks/task-1",
+      "https://api.worldpop.org/v2/tasks/task-1",
     );
     expect(sleep).toHaveBeenCalledWith(1000);
   });
@@ -129,6 +151,261 @@ describe("WorldPop", () => {
         arcGisEndpoint: false,
       }),
     ).rejects.toThrow("WorldPop returned invalid JSON.");
+  });
+
+  it("sums per-feature totals returned for a multi-polygon flood extent", async () => {
+    const multiArea: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        area.features[0],
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [2, 0],
+                [3, 0],
+                [3, 1],
+                [2, 1],
+                [2, 0],
+              ],
+            ],
+          },
+        },
+      ],
+    };
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "success",
+            data: [{ total_population: 120.5 }, { total_population: 79.5 }],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const result = await fetchWorldPopPopulation(multiArea, {
+      fetchImpl: fetchImpl as never,
+    });
+
+    expect(result.totalPopulation).toBe(200);
+    const request = JSON.parse(
+      String(fetchImpl.mock.calls[0][1]?.body),
+    ) as Record<string, { type: string; coordinates: unknown[] }>;
+    expect(request.geojson.type).toBe("MultiPolygon");
+    expect(request.geojson.coordinates).toHaveLength(2);
+  });
+
+  it("repairs self-intersecting flood polygons before submission", async () => {
+    const selfIntersectingArea: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [0, 0],
+                [2, 2],
+                [0, 2],
+                [2, 0],
+                [0, 0],
+              ],
+            ],
+          },
+        },
+      ],
+    };
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "success",
+            result: { total_population: 50 },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    await fetchWorldPopPopulation(selfIntersectingArea, {
+      fetchImpl: fetchImpl as never,
+    });
+
+    const request = JSON.parse(
+      String(fetchImpl.mock.calls[0][1]?.body),
+    ) as Record<string, { type: string; coordinates: unknown[] }>;
+    expect(request.geojson.type).toBe("MultiPolygon");
+    expect(request.geojson.coordinates).toHaveLength(2);
+  });
+
+  it("separates vertices shared by exterior and interior rings", async () => {
+    const touchingHoleArea: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [0, 0],
+                [4, 0],
+                [4, 4],
+                [0, 4],
+                [0, 0],
+              ],
+              [
+                [0, 0],
+                [1, 2],
+                [2, 1],
+                [0, 0],
+              ],
+            ],
+          },
+        },
+      ],
+    };
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "success",
+            result: { total_population: 50 },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    await fetchWorldPopPopulation(touchingHoleArea, {
+      fetchImpl: fetchImpl as never,
+    });
+
+    const request = JSON.parse(
+      String(fetchImpl.mock.calls[0][1]?.body),
+    ) as Record<string, { type: string; coordinates: number[][][] }>;
+    expect(request.geojson.type).toBe("Polygon");
+    expect(request.geojson.coordinates).toHaveLength(2);
+    const vertices = request.geojson.coordinates.flatMap((ring) =>
+      ring.slice(0, -1).map(([x, y]) => `${x},${y}`),
+    );
+    expect(new Set(vertices).size).toBe(vertices.length);
+  });
+
+  it("promotes a ring nested inside a hole to a separate shell", async () => {
+    const nestedArea: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [0, 0],
+                [6, 0],
+                [6, 6],
+                [0, 6],
+                [0, 0],
+              ],
+              [
+                [1, 1],
+                [1, 5],
+                [5, 5],
+                [5, 1],
+                [1, 1],
+              ],
+              [
+                [2, 2],
+                [4, 2],
+                [4, 4],
+                [2, 4],
+                [2, 2],
+              ],
+            ],
+          },
+        },
+      ],
+    };
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "success",
+            result: { total_population: 50 },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    await fetchWorldPopPopulation(nestedArea, {
+      fetchImpl: fetchImpl as never,
+    });
+
+    const request = JSON.parse(
+      String(fetchImpl.mock.calls[0][1]?.body),
+    ) as Record<string, { type: string; coordinates: number[][][][] }>;
+    expect(request.geojson.type).toBe("MultiPolygon");
+    expect(request.geojson.coordinates).toHaveLength(2);
+    expect(
+      request.geojson.coordinates.map((polygon) => polygon.length).sort(),
+    ).toEqual([1, 2]);
+  });
+
+  it("removes a redundant shell nested in another water feature", async () => {
+    const nestedShells: GeoFeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        area.features[0],
+        {
+          type: "Feature",
+          properties: {},
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [0.2, 0.2],
+                [0.8, 0.2],
+                [0.8, 0.8],
+                [0.2, 0.8],
+                [0.2, 0.2],
+              ],
+            ],
+          },
+        },
+      ],
+    };
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "success",
+            result: { total_population: 50 },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    await fetchWorldPopPopulation(nestedShells, {
+      fetchImpl: fetchImpl as never,
+    });
+
+    const request = JSON.parse(
+      String(fetchImpl.mock.calls[0][1]?.body),
+    ) as Record<string, { type: string; coordinates: number[][][] }>;
+    expect(request.geojson.type).toBe("Polygon");
+    const originalCoordinates = (
+      area.features[0].geometry as {
+        coordinates: number[][][];
+      }
+    ).coordinates;
+    expect(request.geojson.coordinates).toEqual(originalCoordinates);
   });
 
   it("aborts a stalled WorldPop request", async () => {

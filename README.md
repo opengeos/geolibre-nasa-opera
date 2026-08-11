@@ -34,18 +34,24 @@ Earthdata authentication and Cloud-Optimized GeoTIFF reads server-side.
   search NASA CMR for OPERA granules, display OPERA rasters through
   titiler-cmr, and use optional JavaScript execution for advanced local
   MapLibre operations.
+- Ask GeoAgent to map a flood using only a place and date range. The automatic
+  workflow combines cloud-penetrating OPERA DSWx-S1 with DSWx-HLS, pre-event
+  and post-event Sentinel-2, WorldPop population, and Overture Maps context.
+  Overture buildings render in 3D above the raster layers, affected buildings
+  are highlighted in red, and the downloaded one-pager includes a generated
+  background narrative.
 
 ### Supported products
 
 | short_name                   | label                                      |
 | ---------------------------- | ------------------------------------------ |
-| `OPERA_L3_DSWX-HLS_V1`       | DSWX-HLS — surface water from HLS          |
-| `OPERA_L3_DSWX-S1_V1`        | DSWX-S1 — surface water from Sentinel-1    |
-| `OPERA_L3_DIST-ALERT-HLS_V1` | DIST-ALERT — near-real-time disturbance    |
-| `OPERA_L3_DIST-ANN-HLS_V1`   | DIST-ANN — annual disturbance              |
-| `OPERA_L2_RTC-S1_V1`         | RTC-S1 — terrain-corrected SAR backscatter |
+| `OPERA_L3_DSWX-HLS_V1`       | DSWX-HLS - surface water from HLS          |
+| `OPERA_L3_DSWX-S1_V1`        | DSWX-S1 - surface water from Sentinel-1    |
+| `OPERA_L3_DIST-ALERT-HLS_V1` | DIST-ALERT - near-real-time disturbance    |
+| `OPERA_L3_DIST-ANN-HLS_V1`   | DIST-ANN - annual disturbance              |
+| `OPERA_L2_RTC-S1_V1`         | RTC-S1 - terrain-corrected SAR backscatter |
 | `OPERA_L2_RTC-S1-STATIC_V1`  | RTC-S1 static layers                       |
-| `OPERA_L2_CSLC-S1_V1`        | CSLC-S1 — coregistered single-look complex |
+| `OPERA_L2_CSLC-S1_V1`        | CSLC-S1 - coregistered single-look complex |
 | `OPERA_L2_CSLC-S1-STATIC_V1` | CSLC-S1 static layers                      |
 
 ## How it works

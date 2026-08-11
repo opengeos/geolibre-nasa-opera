@@ -96,4 +96,60 @@ describe("Sentinel-2 event imagery", () => {
       ),
     ).rejects.toThrow(/No Sentinel-2 L2A scene/i);
   });
+
+  it("prefers a scene covering the AOI center over a peripheral clear scene", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === PLANETARY_COMPUTER_STAC_SEARCH) {
+        return new Response(
+          JSON.stringify({
+            features: [
+              {
+                id: "peripheral-clear",
+                bbox: [0, 0, 2, 2],
+                properties: {
+                  datetime: "2024-11-02T10:00:00Z",
+                  "eo:cloud_cover": 0,
+                },
+                assets: {
+                  tilejson: { href: "https://tiles.example/peripheral" },
+                },
+              },
+              {
+                id: "center-cloudy",
+                bbox: [4, 4, 8, 8],
+                properties: {
+                  datetime: "2024-11-01T10:00:00Z",
+                  "eo:cloud_cover": 12,
+                },
+                assets: {
+                  tilejson: { href: "https://tiles.example/center" },
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      expect(url).toBe("https://tiles.example/center");
+      return new Response(
+        JSON.stringify({
+          tiles: ["https://tiles.example/{z}/{x}/{y}.png"],
+          bounds: [4, 4, 8, 8],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await fetchSentinel2Scene(
+      {
+        bbox: [0, 0, 10, 10],
+        start: "2024-10-29",
+        end: "2024-11-05",
+      },
+      { fetchImpl: fetchImpl as never },
+    );
+
+    expect(result.itemId).toBe("center-cloudy");
+    expect(result.bbox).toEqual([4, 4, 8, 8]);
+  });
 });

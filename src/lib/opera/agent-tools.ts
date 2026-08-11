@@ -29,8 +29,8 @@ Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surfa
 - Use detect_opera_change_between_dates when the user asks to compare two dates, detect change, or create before/after OPERA layers.
 - Use analyze_opera_time_series when the user asks for trends, time-series change, repeated observations, or change over time.
 - Use export_opera_change_report after change detection when the user asks to export, save, summarize, or download the analysis.
-- If the user gives a place but not a bbox, pass the place to map_disaster_event so it can resolve a bounded AOI.
-- For surface water requests, prefer product OPERA_L3_DSWX-HLS_V1 and band B01_WTR unless the user asks for Sentinel-1 DSWx.
+- If the user gives a place, pass the place to map_disaster_event and omit bbox unless the user explicitly supplied coordinates. Never guess or infer bbox coordinates from a place name; a user-drawn AOI is already available to the tool internally.
+- For flood surface-water requests, use both OPERA_L3_DSWX-HLS_V1 and OPERA_L3_DSWX-S1_V1 with band B01_WTR. DSWx-S1 provides radar observations that are not obscured by cloud cover.
 - For SAR backscatter, prefer product OPERA_L2_RTC-S1_V1 and band VV unless the user asks for another polarization.
 - Keep max_granules small, usually 1-3, unless the user asks for many scenes.
 - After displaying OPERA data, summarize product, date range, band, displayed granule count, and any layer ids.
@@ -44,12 +44,12 @@ Advanced titiler-cmr tools are also available for backend-aware analysis beyond 
 Disaster mapping workflow:
 - Identify the hazard, place, and event dates, then call map_disaster_event. It selects the standard datasets and runs the workflow.
 - Only call assets or people "impacted" when a hazard extent is available. Overture and population layers without a hazard intersection are context layers, not measured impacts.
-- map_disaster_event uses OPERA DSWx for floods and adds pre/post Sentinel-2 true-color context from Microsoft Planetary Computer. Treat optical imagery as visual context unless a separate analysis quantifies change.
+- map_disaster_event unions OPERA DSWx-HLS and cloud-penetrating DSWx-S1 observed water for floods and adds pre/post Sentinel-2 true-color context from Microsoft Planetary Computer. Treat optical imagery as visual context unless a separate analysis quantifies change.
 - For wildfires, map_disaster_event first discovers the matching curated NASA Disasters event, maps visible FEDS perimeter, burn-severity, and OPERA DIST products, and intersects the latest usable FEDS perimeter with Overture and WorldPop. If no usable observed perimeter is available, it clearly falls back to contextual exposure layers without claiming impact.
 - For other non-flood disasters, map_disaster_event maps the highest-priority curated NASA event products it can resolve, adds contextual Overture and WorldPop layers, and explains when quantified exposure still requires an authoritative hazard polygon.
 
 Flood impact mapping and one-pager workflow:
-- For a normal place/AOI + date request, call map_disaster_event. It searches and groups pre-event OPERA DSWx, derives and groups post-event observed water, adds grouped pre/post Sentinel-2, maps all AOI Overture buildings and transportation, highlights flooded buildings and affected roads, calculates WorldPop exposure, and downloads the completed one-pager.
+- For a normal place/AOI + date request, call map_disaster_event. It searches and groups pre-event OPERA DSWx-HLS and DSWx-S1, derives and groups their combined post-event observed water, adds grouped pre/post Sentinel-2, maps Overture buildings as 3D extrusions above all raster layers, highlights flooded buildings in red and affected roads in orange, calculates WorldPop exposure, and downloads the completed one-pager with an automatic background narrative.
 - Use derive_flood_benchmark, overture_in_flood, population_in_flood, and sentinel2_event_imagery directly only for explicit step-by-step requests or recovery from a failed composite step.
 - If a human-QAed benchmark is already locked (check get_opera_context or get_benchmark), it is the AUTHORITATIVE ground truth; prefer it over deriving one.
 When a benchmark is locked (either kind), follow these rules strictly:
@@ -59,7 +59,7 @@ When a benchmark is locked (either kind), follow these rules strictly:
 - Call population_in_flood to calculate WorldPop modeled residential population within the flood extent and add a styled 100 m population layer. Describe the result as modeled population exposure, never as deaths, evacuations, or displacement.
 - Call sentinel2_event_imagery for the flood event window before the final map snapshot. If no suitably low-cloud scene is available, report that limitation rather than substituting an unrelated date.
 - To gather event impacts, call news_impact_search and report ONLY figures you can attribute to a returned source_url, always with publisher and date. If a figure has no citable source, omit it.
-- To show the OPERA-observed flood on the one-pager map, display DSWx (product OPERA_L3_DSWX-HLS_V1, band B01_WTR) for the event dates with water_only=true before calling build_one_pager. water_only hides cloud/ocean/no-data so stacked post-event scenes stay legible; the benchmark remains the authoritative extent.
+- To show the OPERA-observed flood on the one-pager map during a manual workflow, display both DSWx-HLS and DSWx-S1 band B01_WTR for the event dates with water_only=true before calling build_one_pager. water_only hides cloud/ocean/no-data so stacked post-event scenes stay legible; the benchmark remains the authoritative extent.
 - For an explicit step-by-step workflow or a regenerated report, call build_one_pager after the map layers are ready, passing the Overture buildings/transportation results, WorldPop result, and cited impacts. Do not call it after a successful map_disaster_event because the composite tool already downloads the report. Pass all measurements exactly as returned; do not fabricate.
 - If the user asks for flood analysis but no benchmark is locked: derive one from OPERA DSWx with derive_flood_benchmark when they gave a place + dates, or tell them to import and lock a QAed benchmark GeoJSON in the OPERA panel's Benchmark section for an authoritative extent.`;
 
@@ -341,7 +341,7 @@ const deriveFloodBenchmarkSchema = z.object({
     .max(12)
     .optional()
     .describe(
-      "Max DSWx granules to mosaic for the observed-water extent (default 6).",
+      "Max granules per DSWx product to mosaic for the observed-water extent (default 6).",
     ),
 });
 
@@ -375,7 +375,7 @@ const disasterContextSchema = z.object({
   population_year: z
     .number()
     .int()
-    .min(2000)
+    .min(2015)
     .max(2020)
     .optional()
     .describe("WorldPop data year (default and latest available: 2020)."),
@@ -430,7 +430,7 @@ const populationInFloodSchema = z.object({
   year: z
     .number()
     .int()
-    .min(2000)
+    .min(2015)
     .max(2020)
     .optional()
     .describe("WorldPop data year (default and latest available: 2020)."),
@@ -779,7 +779,7 @@ export function createOperaAgentTools(
     tool({
       name: "map_disaster_event",
       description:
-        "Run the deterministic authoritative disaster workflow from only hazard, place/AOI, and dates. It selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. Floods use OPERA DSWx and download a one-page assessment; wildfires discover the matching NASA Disasters event and prefer FEDS perimeters, burn-severity products, and OPERA DIST without generating a one-page report. Use this whenever the user does not specify datasets or workflow steps.",
+        "Run the deterministic authoritative disaster workflow from only hazard, place/AOI, and dates. It selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. For floods this automatically adds grouped pre/post OPERA DSWx-HLS, cloud-penetrating DSWx-S1, and Sentinel-2 imagery; derives their combined observed flood water; maps Overture buildings as 3D extrusions above raster layers with affected buildings highlighted red; maps affected roads; calculates WorldPop exposure; and downloads a one-page HTML assessment with a background narrative. Wildfires discover the matching NASA Disasters event and prefer FEDS perimeters, burn-severity products, and OPERA DIST without generating a one-page report. Use this whenever the user does not specify datasets or workflow steps.",
       inputSchema: disasterEventSchema,
       callback: async (input) =>
         toJsonValue(
@@ -835,7 +835,7 @@ export function createOperaAgentTools(
     tool({
       name: "derive_flood_benchmark",
       description:
-        "Auto-derive a flood benchmark from OPERA DSWx for an AOI + date range when NO human-QAed benchmark is locked. Searches DSWx-HLS, renders the observed open/partial surface water on the map, vectorizes it into a polygon, and locks it as the working benchmark (labeled OPERA-observed, not QAed). Use this first when the user asks to map or analyze a flood for a place + time. After it succeeds, continue with overture_in_flood and population_in_flood.",
+        "Auto-derive a flood benchmark from OPERA DSWx for an AOI + date range when NO human-QAed benchmark is locked. Searches both DSWx-HLS and cloud-penetrating DSWx-S1, renders and unions their observed open/partial surface water, vectorizes it into a polygon, and locks it as the working benchmark (labeled OPERA-observed, not QAed). Use this first when the user asks to map or analyze a flood for a place + time. After it succeeds, continue with overture_in_flood and population_in_flood.",
       inputSchema: deriveFloodBenchmarkSchema,
       callback: async (input) =>
         toJsonValue(
