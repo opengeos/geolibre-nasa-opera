@@ -73,6 +73,7 @@ function mapStub() {
   const container = document.createElement("div");
   const sources = new Map<string, unknown>();
   const layers = new Map<string, Record<string, unknown>>();
+  const layerOrder: string[] = [];
   const map = {
     getContainer: () => container,
     on: vi.fn(),
@@ -87,12 +88,33 @@ function mapStub() {
     addSource: vi.fn((id: string, source: unknown) => sources.set(id, source)),
     removeSource: vi.fn((id: string) => sources.delete(id)),
     getLayer: vi.fn((id: string) => layers.get(id)),
-    addLayer: vi.fn((layer: Record<string, unknown>) => {
-      layers.set(String(layer.id), layer);
+    addLayer: vi.fn((layer: Record<string, unknown>, beforeId?: string) => {
+      const id = String(layer.id);
+      layers.set(id, layer);
+      const beforeIndex = beforeId ? layerOrder.indexOf(beforeId) : -1;
+      if (beforeIndex >= 0) layerOrder.splice(beforeIndex, 0, id);
+      else layerOrder.push(id);
     }),
-    removeLayer: vi.fn((id: string) => layers.delete(id)),
-    moveLayer: vi.fn(),
+    removeLayer: vi.fn((id: string) => {
+      layers.delete(id);
+      const index = layerOrder.indexOf(id);
+      if (index >= 0) layerOrder.splice(index, 1);
+    }),
+    moveLayer: vi.fn((id: string, beforeId?: string) => {
+      const index = layerOrder.indexOf(id);
+      if (index >= 0) layerOrder.splice(index, 1);
+      const beforeIndex = beforeId ? layerOrder.indexOf(beforeId) : -1;
+      if (beforeIndex >= 0) layerOrder.splice(beforeIndex, 0, id);
+      else layerOrder.push(id);
+    }),
     getCanvas: () => ({ style: {} }),
+    getStyle: () => ({
+      layers: layerOrder
+        .map((id) => layers.get(id))
+        .filter((layer): layer is Record<string, unknown> => Boolean(layer)),
+    }),
+    getPitch: vi.fn(() => 0),
+    easeTo: vi.fn(),
     queryRenderedFeatures: vi.fn(() => []),
   };
   return { map, layers };
@@ -345,9 +367,23 @@ describe("disaster impact control", () => {
     await control.overtureInFloodForAgent();
     await control.populationInFloodForAgent();
 
-    expect(layers.get("opera-impact-overture-buildings-fill")?.paint).toEqual({
-      "fill-color": "#dc2626",
-      "fill-opacity": 0.68,
+    expect(
+      layers.get("opera-context-overture-buildings-extrusion")?.paint,
+    ).toEqual({
+      "fill-extrusion-color": "#64748b",
+      "fill-extrusion-opacity": 0.42,
+      "fill-extrusion-height": ["to-number", ["get", "_opera_height_m"], 8],
+      "fill-extrusion-base": 0,
+      "fill-extrusion-vertical-gradient": true,
+    });
+    expect(
+      layers.get("opera-impact-overture-buildings-extrusion")?.paint,
+    ).toEqual({
+      "fill-extrusion-color": "#dc2626",
+      "fill-extrusion-opacity": 0.92,
+      "fill-extrusion-height": ["to-number", ["get", "_opera_height_m"], 8],
+      "fill-extrusion-base": 0,
+      "fill-extrusion-vertical-gradient": true,
     });
     expect(
       layers.get("opera-impact-overture-transportation-line")?.paint,
@@ -365,6 +401,35 @@ describe("disaster impact control", () => {
       "raster-opacity": 0.55,
       "raster-resampling": "linear",
     });
+    expect(map.easeTo).toHaveBeenCalledWith({ pitch: 45, duration: 800 });
+    expect(map.addLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "opera-impact-worldpop-raster" }),
+      "opera-context-overture-buildings-extrusion",
+    );
+    expect(map.addSource).toHaveBeenCalledWith(
+      "opera-context-overture-buildings-source",
+      expect.objectContaining({
+        data: expect.objectContaining({
+          features: [
+            expect.objectContaining({
+              properties: expect.objectContaining({ _opera_height_m: 8 }),
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(map.addSource).toHaveBeenCalledWith(
+      "opera-impact-overture-buildings-source",
+      expect.objectContaining({
+        data: expect.objectContaining({
+          features: [
+            expect.objectContaining({
+              properties: expect.objectContaining({ _opera_height_m: 9 }),
+            }),
+          ],
+        }),
+      }),
+    );
     expect(registerLayer.mock.calls.map(([layer]) => layer.id)).toEqual([
       "opera-context-overture-buildings",
       "opera-context-overture-road",
@@ -527,14 +592,23 @@ describe("disaster impact control", () => {
       product: "OPERA_L3_DSWX-HLS_V1",
       granules: [{ id: "PRE", bands: ["B01_WTR"], linkCount: 1 }],
     });
-    vi.spyOn(control, "displayForAgent").mockResolvedValue({
-      ok: true,
-      status: "Displayed pre-event OPERA.",
-      product: "OPERA_L3_DSWX-HLS_V1",
-      granules: [],
-      displayedLayerIds: ["opera-pre"],
-      selectedGranuleIds: ["PRE"],
-    });
+    vi.spyOn(control, "displayForAgent")
+      .mockResolvedValueOnce({
+        ok: true,
+        status: "Displayed pre-event DSWx-HLS.",
+        product: "OPERA_L3_DSWX-HLS_V1",
+        granules: [],
+        displayedLayerIds: ["opera-pre-hls"],
+        selectedGranuleIds: ["PRE-HLS"],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: "Displayed pre-event DSWx-S1.",
+        product: "OPERA_L3_DSWX-S1_V1",
+        granules: [],
+        displayedLayerIds: ["opera-pre-s1"],
+        selectedGranuleIds: ["PRE-S1"],
+      });
     vi.spyOn(control, "deriveFloodBenchmarkForAgent").mockResolvedValue({
       ok: true,
       status: "Derived flood.",
@@ -575,10 +649,12 @@ describe("disaster impact control", () => {
       year: 2020,
       source: "WorldPop",
     });
+    const onePagerHtml = `<html>${"x".repeat(2_000_000)}</html>`;
     vi.spyOn(control, "buildOnePagerForAgent").mockResolvedValue({
       ok: true,
       status: "One-pager ready and downloaded.",
       filename: "opera-one-pager-valencia-region-spain-flood.html",
+      html: onePagerHtml,
     });
 
     const result = await control.mapDisasterEventForAgent({
@@ -605,11 +681,21 @@ describe("disaster impact control", () => {
     );
     expect(control.searchForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        product: "OPERA_L3_DSWX-HLS_V1",
         bbox: [-0.95, 39.1, -0.05, 39.8],
         addFootprints: false,
         fitBounds: false,
       }),
     );
+    expect(control.searchForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        product: "OPERA_L3_DSWX-S1_V1",
+        bbox: [-0.95, 39.1, -0.05, 39.8],
+        addFootprints: false,
+        fitBounds: false,
+      }),
+    );
+    expect(control.searchForAgent).toHaveBeenCalledTimes(2);
     expect(control.displayForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         clipBounds: [-0.95, 39.1, -0.05, 39.8],
@@ -639,6 +725,7 @@ describe("disaster impact control", () => {
       maxFeatures: 250_000,
     });
     expect(control.buildOnePagerForAgent).toHaveBeenCalledWith({
+      narrative: expect.stringContaining("cloud-penetrating DSWx-S1"),
       buildings: {
         floodedCount: 2,
         total: 10,
@@ -661,19 +748,27 @@ describe("disaster impact control", () => {
     expect(
       vi.mocked(control.populationInFloodForAgent).mock.invocationCallOrder[0],
     ).toBeLessThan(
+      vi.mocked(control.overtureInFloodForAgent).mock.invocationCallOrder[0],
+    );
+    expect(
+      vi.mocked(control.overtureInFloodForAgent).mock.invocationCallOrder[0],
+    ).toBeLessThan(
       vi.mocked(control.buildOnePagerForAgent).mock.invocationCallOrder[0],
     );
     expect(result.onePager).toMatchObject({
       ok: true,
       filename: "opera-one-pager-valencia-region-spain-flood.html",
+      bytes: onePagerHtml.length,
     });
+    expect(result.onePager).not.toHaveProperty("html");
+    expect(JSON.stringify(result).length).toBeLessThan(10_000);
     expect(result.status).toContain("one-pager was downloaded");
     expect(addLayerGroup).toHaveBeenCalledWith(
-      "Pre-event OPERA - Valencia Region, Spain flood",
-      ["opera-pre"],
+      "Pre-event OPERA DSWx-HLS + DSWx-S1 - Valencia Region, Spain flood",
+      ["opera-pre-hls", "opera-pre-s1"],
     );
     expect(addLayerGroup).toHaveBeenCalledWith(
-      "Post-event OPERA - Valencia Region, Spain flood",
+      "Post-event OPERA DSWx-HLS + DSWx-S1 - Valencia Region, Spain flood",
       ["opera-post"],
     );
   });

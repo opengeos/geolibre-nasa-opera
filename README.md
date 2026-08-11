@@ -34,19 +34,25 @@ Earthdata authentication and Cloud-Optimized GeoTIFF reads server-side.
   search NASA CMR for OPERA granules, display OPERA rasters through
   titiler-cmr, and use optional JavaScript execution for advanced local
   MapLibre operations.
+- Ask GeoAgent to map a flood using only a place and date range. The automatic
+  workflow combines cloud-penetrating OPERA DSWx-S1 with DSWx-HLS, pre-event
+  and post-event Sentinel-2, WorldPop population, and Overture Maps context.
+  Overture buildings render in 3D above the raster layers, affected buildings
+  are highlighted in red, and the downloaded one-pager includes a generated
+  background narrative.
 
 ### Supported products
 
-| short_name | label |
-| --- | --- |
-| `OPERA_L3_DSWX-HLS_V1` | DSWX-HLS — surface water from HLS |
-| `OPERA_L3_DSWX-S1_V1` | DSWX-S1 — surface water from Sentinel-1 |
-| `OPERA_L3_DIST-ALERT-HLS_V1` | DIST-ALERT — near-real-time disturbance |
-| `OPERA_L3_DIST-ANN-HLS_V1` | DIST-ANN — annual disturbance |
-| `OPERA_L2_RTC-S1_V1` | RTC-S1 — terrain-corrected SAR backscatter |
-| `OPERA_L2_RTC-S1-STATIC_V1` | RTC-S1 static layers |
-| `OPERA_L2_CSLC-S1_V1` | CSLC-S1 — coregistered single-look complex |
-| `OPERA_L2_CSLC-S1-STATIC_V1` | CSLC-S1 static layers |
+| short_name                   | label                                      |
+| ---------------------------- | ------------------------------------------ |
+| `OPERA_L3_DSWX-HLS_V1`       | DSWX-HLS - surface water from HLS          |
+| `OPERA_L3_DSWX-S1_V1`        | DSWX-S1 - surface water from Sentinel-1    |
+| `OPERA_L3_DIST-ALERT-HLS_V1` | DIST-ALERT - near-real-time disturbance    |
+| `OPERA_L3_DIST-ANN-HLS_V1`   | DIST-ANN - annual disturbance              |
+| `OPERA_L2_RTC-S1_V1`         | RTC-S1 - terrain-corrected SAR backscatter |
+| `OPERA_L2_RTC-S1-STATIC_V1`  | RTC-S1 static layers                       |
+| `OPERA_L2_CSLC-S1_V1`        | CSLC-S1 - coregistered single-look complex |
+| `OPERA_L2_CSLC-S1-STATIC_V1` | CSLC-S1 static layers                      |
 
 ## How it works
 
@@ -267,11 +273,11 @@ human-QAed flood map, into interactive analysis layers and a shareable one-pager
      date range and it calls `derive_flood_benchmark`: it searches OPERA DSWx-HLS
      for the AOI + dates, renders the observed open/partial surface water, and
      **vectorizes it** into a flood polygon that is locked as the working
-     benchmark. This extent is *OPERA-observed, not human-QAed* and is labeled as
+     benchmark. This extent is _OPERA-observed, not human-QAed_ and is labeled as
      such on the one-pager.
    - **Import a QAed benchmark (authoritative).** In the OPERA panel's **Flood
      benchmark** section, import a QAed flood water-extent GeoJSON
-     (`Polygon`/`MultiPolygon`). It is *locked* as the authoritative ground truth
+     (`Polygon`/`MultiPolygon`). It is _locked_ as the authoritative ground truth
      and drawn on the map. A sample placeholder is at
      [`examples/sample-benchmark-valencia.geojson`](examples/sample-benchmark-valencia.geojson).
      When a QAed benchmark is locked, the agent uses it instead of deriving one.

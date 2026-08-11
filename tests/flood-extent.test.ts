@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   chooseZoom,
+  downsampleBinaryMask,
   deriveFloodExtent,
   traceMaskRings,
   maskToFeatureCollection,
+  splitRepeatedRingVertices,
 } from "../src/lib/opera/flood-extent";
 import { pointInWater, waterAreaKm2 } from "../src/lib/opera/geometry";
 
@@ -53,6 +55,45 @@ describe("traceMaskRings", () => {
       return inBlock && !inHole;
     });
     expect(traceMaskRings(mask, 9, 9)).toHaveLength(2);
+  });
+
+  it("splits a ring that revisits a diagonal pinch point", () => {
+    const rings = splitRepeatedRingVertices([
+      [0, 0],
+      [2, 0],
+      [2, 2],
+      [0, 2],
+      [0, 0],
+      [-2, 0],
+      [-2, -2],
+      [0, -2],
+      [0, 0],
+    ]);
+
+    expect(rings).toHaveLength(2);
+    expect(rings.every((ring) => ring.length === 5)).toBe(true);
+    expect(
+      rings.every(
+        (ring) =>
+          new Set(ring.slice(0, -1).map(([x, y]) => `${x},${y}`)).size ===
+          ring.length - 1,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("downsampleBinaryMask", () => {
+  it("retains water when aggregating partial edge cells", () => {
+    const mask = makeMask(
+      7,
+      5,
+      (x, y) => (x === 3 && y === 1) || (x === 6 && y === 4),
+    );
+
+    const sampled = downsampleBinaryMask(mask, 7, 5, 4);
+
+    expect(sampled).toMatchObject({ width: 2, height: 2, scale: 4 });
+    expect(Array.from(sampled.mask)).toEqual([1, 0, 0, 1]);
   });
 });
 
@@ -114,6 +155,32 @@ describe("maskToFeatureCollection", () => {
       Math.min(...lons) + (Math.max(...lons) - Math.min(...lons)) * 0.08;
     expect(pointInWater([edgeLon, cLat], fc)).toBe(true);
   });
+
+  it("promotes water nested inside a dry hole to a separate polygon", () => {
+    const mask = makeMask(15, 15, (x, y) => {
+      const inOuter = x >= 1 && x <= 13 && y >= 1 && y <= 13;
+      const inHole = x >= 3 && x <= 11 && y >= 3 && y <= 11;
+      const inIsland = x >= 5 && x <= 9 && y >= 5 && y <= 9;
+      return inOuter && (!inHole || inIsland);
+    });
+
+    const fc = maskToFeatureCollection(mask, 15, 15, {
+      zoom,
+      originPx,
+      originPy,
+      minAreaKm2: 0,
+    });
+
+    expect(fc.features).toHaveLength(2);
+    const ringCounts = fc.features
+      .map(
+        (feature) =>
+          (feature.geometry as { coordinates: number[][][] }).coordinates
+            .length,
+      )
+      .sort();
+    expect(ringCounts).toEqual([1, 2]);
+  });
 });
 
 describe("chooseZoom", () => {
@@ -153,5 +220,42 @@ describe("chooseZoom", () => {
         ["https://tiles.example/{z}/{x}/{y}.png"],
       ),
     ).rejects.toThrow(/finite bbox/);
+  });
+
+  it("clips opaque source tiles to the requested bbox", async () => {
+    const bbox: [number, number, number, number] = [
+      -0.527, 39.232, -0.176, 39.54,
+    ];
+    const result = await deriveFloodExtent(
+      bbox,
+      ["https://tiles.example/{z}/{x}/{y}.png"],
+      {
+        loadTile: async () => {
+          const data = new Uint8ClampedArray(256 * 256 * 4);
+          for (let index = 3; index < data.length; index += 4) {
+            data[index] = 255;
+          }
+          return { data, width: 256, height: 256 };
+        },
+      },
+    );
+    const coordinates = result.features.flatMap((feature) =>
+      (
+        feature.geometry as {
+          coordinates: number[][][];
+        }
+      ).coordinates.flat(),
+    );
+
+    expect(coordinates.length).toBeGreaterThan(0);
+    expect(
+      coordinates.every(
+        ([longitude, latitude]) =>
+          longitude >= bbox[0] - 0.001 &&
+          longitude <= bbox[2] + 0.001 &&
+          latitude >= bbox[1] - 0.001 &&
+          latitude <= bbox[3] + 0.001,
+      ),
+    ).toBe(true);
   });
 });
