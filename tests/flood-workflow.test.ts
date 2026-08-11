@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildingsInFlood,
   dedupeOvertureFeatures,
@@ -27,6 +27,10 @@ import {
   buildOnePagerHtml,
   scaleBar,
 } from "../src/lib/opera/one-pager";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 // A 1x1 degree square around [0,0].
 const square: PolygonGeometry = {
@@ -283,6 +287,22 @@ describe("news", () => {
     expect(resolveNewsProxyEndpoint("https://news.example.com/")).toBe(
       "https://news.example.com",
     );
+  });
+
+  it("reads the Docker runtime news endpoint", () => {
+    vi.stubGlobal("__GEOLIBRE_DEPLOYMENT_ENV__", {
+      GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT: "/ai/",
+    });
+
+    expect(resolveNewsProxyEndpoint()).toBe("/ai");
+  });
+
+  it("supports the legacy Docker runtime news endpoint key", () => {
+    vi.stubGlobal("__GEOLIBRE_DEPLOYMENT_ENV__", {
+      VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT: "/legacy-ai/",
+    });
+
+    expect(resolveNewsProxyEndpoint()).toBe("/legacy-ai");
   });
 
   it("searchNews throws when no endpoint is configured", async () => {

@@ -8,7 +8,7 @@ compatibility_date = "2026-05-28"
 # with your deployed origin(s), e.g.:
 # ALLOWED_ORIGINS = "https://your-geolibre.example.com"
 # Set to "*" only if you intentionally want any origin to use the proxy.
-ALLOWED_ORIGINS = "http://localhost:5173"
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:8081,http://127.0.0.1:8081"
 
 # The Tavily API key is a SECRET, never a var. Set it with:
 #   npx wrangler secret put TAVILY_API_KEY --config wrangler.news.toml

@@ -519,6 +519,56 @@ describe("disaster impact control", () => {
     );
   });
 
+  it("places Sentinel-2 imagery beneath vector style layers", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/stac/v1/search")) {
+          return new Response(
+            JSON.stringify({
+              features: [
+                {
+                  id: "S2_BELOW_VECTORS",
+                  bbox: [0, 0, 1, 1],
+                  properties: { datetime: "2024-11-02T10:00:00Z" },
+                  assets: {
+                    tilejson: { href: "https://tiles.example/below.json" },
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({ tiles: ["https://tiles.example/{z}/{x}/{y}.png"] }),
+          { status: 200 },
+        );
+      }),
+    );
+    const registerLayer = vi.fn();
+    const control = new OperaControl({ registerLayer });
+    const { map } = mapStub();
+    map.addLayer({ id: "basemap-raster", type: "raster" });
+    map.addLayer({ id: "roads-line", type: "line" });
+    map.addLayer({ id: "labels", type: "symbol" });
+    control.renderDocked(document.createElement("div"), map as never);
+
+    await control.sentinel2ImageryForAgent({
+      bbox: [0, 0, 1, 1],
+      start: "2024-10-29",
+      end: "2024-11-05",
+    });
+
+    expect(registerLayer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "sentinel-2-S2-BELOW-VECTORS",
+        beforeId: "roads-line",
+      }),
+    );
+    control.teardownDocked();
+  });
+
   it("groups automatic pre-event Sentinel-2 imagery separately", async () => {
     vi.stubGlobal(
       "fetch",
@@ -811,5 +861,351 @@ describe("disaster impact control", () => {
     expect(control.mapDisasterContextForAgent).toHaveBeenCalledWith(
       expect.objectContaining({ bbox: drawnAoi }),
     );
+  });
+
+  it("uses the default NASA FEDS extent for wildfire exposure", async () => {
+    const registerLayer = vi.fn();
+    const geocodePlace = vi.fn(async () => ({
+      bbox: [-109.1, 37, -102, 41] as [number, number, number, number],
+      displayName: "Colorado, United States",
+    }));
+    const discoverDisasterEvent = vi.fn(async () => ({
+      groupId: "colorado-fire-group",
+      title: "Colorado Fires July 2026",
+      portalUrl:
+        "https://gis.earthdata.nasa.gov/portal/home/group.html?id=colorado-fire-group",
+      items: [
+        {
+          id: "feds-web-map",
+          title: "Fire Events Data Suite (FEDS) Web Map",
+          type: "Web Map",
+          portalUrl:
+            "https://gis.earthdata.nasa.gov/portal/home/item.html?id=feds-web-map",
+          tags: ["NASA", "Wildfire"],
+        },
+      ],
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              operationalLayers: [
+                {
+                  title: "FEDS Fire Perimeters",
+                  url: "https://example.com/feds/MapServer",
+                  layerType: "ArcGISMapServiceLayer",
+                },
+              ],
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: { fireid: 59297, t: 100 },
+                  geometry: {
+                    type: "Polygon",
+                    coordinates: [
+                      [
+                        [-110, 36],
+                        [-101, 36],
+                        [-101, 42],
+                        [-110, 42],
+                        [-110, 36],
+                      ],
+                    ],
+                  },
+                },
+              ],
+            }),
+          ),
+        )
+        .mockResolvedValue(
+          new Response(JSON.stringify({ operationalLayers: [] })),
+        ),
+    );
+    const fitBounds = vi.fn();
+    const control = new OperaControl({
+      registerLayer,
+      geocodePlace,
+      discoverDisasterEvent,
+      fitBounds,
+    });
+    const { map } = mapStub();
+    control.renderDocked(document.createElement("div"), map as never);
+    vi.spyOn(control, "newsImpactSearchForAgent").mockResolvedValue({
+      ok: true,
+      status: "Found news.",
+      results: [],
+    });
+    vi.spyOn(control, "sentinel2ImageryForAgent").mockResolvedValue({
+      ok: true,
+      status: "Added imagery.",
+      provider: "Sentinel-2",
+    });
+    vi.spyOn(control, "overtureInFloodForAgent").mockResolvedValue({
+      ok: true,
+      status: "Calculated wildfire exposure.",
+      contextPluginActivated: true,
+      layerIds: ["buildings", "roads"],
+      buildings: {
+        total: 10,
+        floodedCount: 2,
+        fraction: 0.2,
+        source: "Overture Maps",
+      },
+      transportation: {
+        candidateSegments: 4,
+        impactedSegmentCount: 1,
+        impactedLengthKm: 3,
+        bySubtype: { road: 1 },
+        source: "Overture Maps roads",
+      },
+    });
+    vi.spyOn(control, "populationInFloodForAgent").mockResolvedValue({
+      ok: true,
+      status: "Calculated population exposure.",
+      totalPopulation: 500,
+      year: 2020,
+      source: "WorldPop",
+    });
+
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "fire",
+      place: "Colorado",
+      start: "2026-06-19",
+      end: "2026-07-23",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.hazard).toBe("wildfire");
+    expect(result.nasaEvent?.groupId).toBe("colorado-fire-group");
+    expect(result.sources?.slice(0, 3).map((source) => source.id)).toEqual([
+      "nasa-feds",
+      "burn-severity",
+      "opera-dist",
+    ]);
+    expect(result.authoritativeLayerIds).toHaveLength(2);
+    expect(result.bbox).toEqual([-109.1, 37, -102, 41]);
+    expect(control.overtureInFloodForAgent).toHaveBeenCalledWith({
+      bbox: [-109.1, 37, -102, 41],
+      addLayers: true,
+      computeBuildingArea: true,
+      maxFeatures: 250_000,
+    });
+    expect(result.status).toContain("calculated exposure");
+    expect(fitBounds).toHaveBeenLastCalledWith([-109.1, 37, -102, 41]);
+  });
+
+  it("persists the hazard associated with a locked analysis extent", async () => {
+    const first = new OperaControl();
+    first.lockBenchmarkFromGeoJson(
+      water,
+      { name: "Observed fire" },
+      undefined,
+      { hazard: "wildfire", addLayer: false },
+    );
+    const state = first.getState();
+    expect(state.hazard).toBe("wildfire");
+
+    const queryOvertureFeatures = vi.fn(async (query: GeoLibreOvertureQuery) =>
+      queryResult(query.theme, query.sourceLayer, {
+        type: "FeatureCollection",
+        features: [],
+      }),
+    );
+    const restored = new OperaControl({ queryOvertureFeatures });
+    restored.setState({ ...state, hazard: "flood" });
+    const { map } = mapStub();
+    restored.renderDocked(document.createElement("div"), map as never);
+    restored.setState({ hazard: "wildfire" });
+
+    const result = await restored.overtureInFloodForAgent({ addLayers: false });
+    expect(result.status).toContain("wildfire extent");
+    expect(result.status).not.toContain("flood extent");
+  });
+
+  it("renders point NASA feature services as visible circle layers", async () => {
+    const discoverDisasterEvent = vi.fn(async () => ({
+      groupId: "event",
+      title: "Colorado Fires 2026",
+      portalUrl: "https://example.com/event",
+      items: [
+        {
+          id: "burn-map",
+          title: "Burn severity observations",
+          type: "Web Map",
+          portalUrl: "https://example.com/burn-map",
+          tags: ["burn"],
+        },
+      ],
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              operationalLayers: [
+                {
+                  title: "Fire observations",
+                  url: "https://example.com/observations/FeatureServer/0",
+                  layerType: "ArcGISFeatureLayer",
+                },
+              ],
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              type: "FeatureCollection",
+              features: [
+                {
+                  type: "Feature",
+                  properties: {},
+                  geometry: { type: "Point", coordinates: [-105, 39] },
+                },
+              ],
+            }),
+          ),
+        )
+        .mockResolvedValue(
+          new Response(JSON.stringify({ operationalLayers: [] })),
+        ),
+    );
+    const control = new OperaControl({
+      discoverDisasterEvent,
+      geocodePlace: async () => ({
+        bbox: [-109.1, 37, -102, 41],
+        displayName: "Colorado",
+      }),
+    });
+    const { map, layers } = mapStub();
+    control.renderDocked(document.createElement("div"), map as never);
+    vi.spyOn(control, "newsImpactSearchForAgent").mockResolvedValue({
+      ok: true,
+      status: "Found news.",
+      results: [],
+    });
+    vi.spyOn(control, "mapDisasterContextForAgent").mockResolvedValue({
+      ok: true,
+      status: "Mapped context.",
+      hazard: "wildfire",
+      bbox: [-109.1, 37, -102, 41],
+      overtureContextActivated: true,
+    });
+    vi.spyOn(control, "sentinel2ImageryForAgent").mockResolvedValue({
+      ok: true,
+      status: "Added imagery.",
+      provider: "Sentinel-2",
+    });
+
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "wildfire",
+      place: "Colorado",
+      start: "2026-06-19",
+      end: "2026-07-23",
+    });
+
+    expect(result.authoritativeLayerIds).toHaveLength(1);
+    expect([...layers.values()]).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "circle" })]),
+    );
+  });
+
+  it("does not report a NASA raster layer rejected by the host", async () => {
+    const discoverDisasterEvent = vi.fn(async () => ({
+      groupId: "event",
+      title: "Colorado Fires 2026",
+      portalUrl: "https://example.com/event",
+      items: [
+        {
+          id: "burn-map",
+          title: "Burn severity observations",
+          type: "Web Map",
+          portalUrl: "https://example.com/burn-map",
+          tags: ["burn"],
+        },
+      ],
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              operationalLayers: [
+                {
+                  title: "Burn severity",
+                  url: "https://example.com/burn/MapServer",
+                  layerType: "ArcGISMapServiceLayer",
+                },
+              ],
+            }),
+          ),
+      ),
+    );
+    const control = new OperaControl({
+      registerLayer: () => {
+        throw new Error("host rejected layer");
+      },
+      discoverDisasterEvent,
+      geocodePlace: async () => ({
+        bbox: [-109.1, 37, -102, 41],
+        displayName: "Colorado",
+      }),
+    });
+    vi.spyOn(control, "newsImpactSearchForAgent").mockResolvedValue({
+      ok: true,
+      status: "Found news.",
+      results: [],
+    });
+    vi.spyOn(control, "mapDisasterContextForAgent").mockResolvedValue({
+      ok: false,
+      status: "No context.",
+      hazard: "wildfire",
+      overtureContextActivated: false,
+    });
+    vi.spyOn(control, "sentinel2ImageryForAgent").mockResolvedValue({
+      ok: false,
+      status: "No imagery.",
+      provider: "Sentinel-2",
+    });
+
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "wildfire",
+      place: "Colorado",
+      start: "2026-06-19",
+      end: "2026-07-23",
+    });
+
+    expect(result.authoritativeLayerIds).toEqual([]);
+    expect(result.warnings).toContain(
+      "Burn severity: failed to register raster layer.",
+    );
+  });
+
+  it("rejects a blank disaster type before normalization", async () => {
+    const control = new OperaControl();
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "   ",
+      bbox: [0, 0, 1, 1],
+      start: "2026-06-19",
+      end: "2026-07-23",
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      status: "Provide a disaster type.",
+      hazard: "",
+    });
   });
 });

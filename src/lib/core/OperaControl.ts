@@ -80,6 +80,18 @@ import {
   worldPopImageUrl,
 } from "../opera/population";
 import { fetchSentinel2Scene } from "../opera/satellite-imagery";
+import {
+  defaultAuthoritativeSources,
+  arcGisExportTileUrl,
+  discoverNasaDisasterEvent,
+  fetchVisibleWebMapLayers,
+  latestFedsPerimeters,
+  normalizeDisasterHazard,
+  queryArcGisGeoJson,
+  rankNasaDisasterItems,
+  type AuthoritativeDisasterSource,
+  type NasaDisasterEvent,
+} from "../opera/disaster-sources";
 
 /**
  * Persisted state for the OPERA control. Saved with the GeoLibre project via the
@@ -107,6 +119,8 @@ export interface OperaState {
   endpoint: string;
   /** Precise user-drawn AOI used by composite agent workflows. */
   agentAoiBBox?: BBox;
+  /** Hazard represented by the persisted locked analysis extent. */
+  hazard?: string;
   /**
    * The human-QAed flood benchmark locked as the agent's authoritative
    * boundary. Persisted with the project so a locked benchmark survives reloads.
@@ -148,6 +162,8 @@ export interface OperaControlOptions {
   getMapBounds?: () => BBox | null;
   /** Resolve a named place to a bounded disaster-analysis AOI. */
   geocodePlace?: (place: string) => Promise<GeocodedPlace>;
+  /** Discover a curated NASA Disasters event for deterministic agent routing. */
+  discoverDisasterEvent?: typeof discoverNasaDisasterEvent;
   /** Notify companion UI when the user-drawn agent AOI changes. */
   onAgentAoiChange?: (bbox: BBox | undefined) => void;
   /** Initial titiler-cmr endpoint. Overrides runtime/build defaults. */
@@ -322,6 +338,8 @@ export interface OperaAgentTileLayerParams {
   fitBounds?: boolean;
   /** Restrict the raster source to these bounds. */
   bounds?: BBox;
+  /** Insert this raster beneath an existing native MapLibre layer. */
+  beforeId?: string;
 }
 
 /** Result of `getBenchmarkForAgent` / benchmark-gated tools. */
@@ -534,6 +552,14 @@ export interface OperaAgentDisasterEventResult {
   population?: OperaAgentPopulationResult;
   onePager?: Omit<OperaAgentOnePagerResult, "html"> & { bytes?: number };
   context?: OperaAgentDisasterContextResult;
+  /** Ordered source policy applied because the user did not name sources. */
+  sources?: AuthoritativeDisasterSource[];
+  /** Curated NASA event selected for this place, hazard, and time span. */
+  nasaEvent?: NasaDisasterEvent;
+  /** GeoLibre layer ids added from authoritative hazard products. */
+  authoritativeLayerIds?: string[];
+  /** Attributable impact sources returned by the configured news proxy. */
+  news?: OperaAgentNewsResult;
   warnings: string[];
 }
 
@@ -681,6 +707,10 @@ export class OperaControl implements IControl {
   private _state: OperaState;
   private _lastStatus = "";
   private _lastChangeResult?: OperaAgentChangeResult;
+  /** Hazard represented by the current locked analysis extent. */
+  private get _benchmarkHazard(): string {
+    return normalizeDisasterHazard(this._state.hazard ?? "flood");
+  }
 
   private _granules: OperaGranule[] = [];
   // Current displayed (sorted) order of the results table.
@@ -765,7 +795,9 @@ export class OperaControl implements IControl {
    * and not restored automatically, so re-add it when the control (re)mounts.
    */
   private _restoreBenchmarkLayer(): void {
-    if (this._state.benchmark) this._addBenchmarkLayer(this._state.benchmark);
+    if (this._state.benchmark) {
+      this._addBenchmarkLayer(this._state.benchmark);
+    }
   }
 
   onRemove(): void {
@@ -1115,6 +1147,7 @@ export class OperaControl implements IControl {
           : {}),
       },
       nativeLayerIds: [],
+      beforeId: params.beforeId,
       opacity: params.opacity ?? 1,
       metadata: params.metadata,
     });
@@ -1524,6 +1557,7 @@ export class OperaControl implements IControl {
     rawGeoJson: unknown,
     event: BenchmarkEvent,
     render?: BenchmarkRender,
+    options: { hazard?: string; addLayer?: boolean } = {},
   ): OperaAgentBenchmarkResult {
     let benchmark: LockedBenchmark;
     try {
@@ -1538,7 +1572,8 @@ export class OperaControl implements IControl {
       return { ok: false, status };
     }
     this._state.benchmark = benchmark;
-    this._addBenchmarkLayer(benchmark);
+    this._state.hazard = normalizeDisasterHazard(options.hazard ?? "flood");
+    if (options.addLayer !== false) this._addBenchmarkLayer(benchmark);
     this._options.fitBounds?.(benchmark.bbox);
     this._updateBenchmarkStatus();
     const status = `Locked benchmark "${benchmark.event.name}" (${benchmark.areaKm2.toFixed(2)} km²).`;
@@ -1549,6 +1584,7 @@ export class OperaControl implements IControl {
   /** Remove the locked benchmark. */
   clearBenchmark(): void {
     this._state.benchmark = undefined;
+    this._state.hazard = undefined;
     this._updateBenchmarkStatus();
     this._setStatus("Benchmark cleared.");
   }
@@ -1851,6 +1887,12 @@ export class OperaControl implements IControl {
     params: OperaAgentOvertureParams = {},
   ): Promise<OperaAgentOvertureResult> {
     const benchmark = this._state.benchmark;
+    const isFlood = this._benchmarkHazard === "flood";
+    const extentLabel = isFlood
+      ? "flood extent"
+      : `${this._benchmarkHazard} extent`;
+    const exposedLabel = isFlood ? "Flooded" : "Exposed";
+    const affectedLabel = isFlood ? "Flood-affected" : "Exposed";
     const emptyResult = (
       status: string,
       contextPluginActivated = false,
@@ -2023,7 +2065,7 @@ export class OperaControl implements IControl {
       if (buildingImpact.floodedFeatures.length > 0) {
         buildingsLayerId = this._addStyledGeoJsonImpactLayer({
           id: "opera-impact-overture-buildings",
-          name: `Flooded Overture buildings - ${benchmark.event.name}`,
+          name: `${exposedLabel} Overture buildings - ${benchmark.event.name}`,
           data: extrudedFloodedBuildings,
           geometry: "extrusion",
           color: "#dc2626",
@@ -2035,7 +2077,7 @@ export class OperaControl implements IControl {
       if (transportationImpact.impactedFeatures.length > 0) {
         transportationLayerId = this._addStyledGeoJsonImpactLayer({
           id: "opera-impact-overture-transportation",
-          name: `Flood-affected roads - ${benchmark.event.name}`,
+          name: `${affectedLabel} roads - ${benchmark.event.name}`,
           data: {
             type: "FeatureCollection",
             features: transportationImpact.impactedFeatures,
@@ -2062,8 +2104,8 @@ export class OperaControl implements IControl {
     this._enableDisaster3DView();
 
     const status =
-      `Overture ${buildingQuery.release}: ${buildingImpact.floodedCount.toLocaleString()} flooded ` +
-      `building(s) and ${transportationImpact.impactedLengthKm.toFixed(1)} km of affected roads.`;
+      `Overture ${buildingQuery.release}: ${buildingImpact.floodedCount.toLocaleString()} exposed ` +
+      `building(s) and ${transportationImpact.impactedLengthKm.toFixed(1)} km of roads intersect ${extentLabel}.`;
     this._setStatus(status);
     return {
       ok: true,
@@ -2098,6 +2140,10 @@ export class OperaControl implements IControl {
     params: OperaAgentPopulationParams = {},
   ): Promise<OperaAgentPopulationResult> {
     const benchmark = this._state.benchmark;
+    const extentLabel =
+      this._benchmarkHazard === "flood"
+        ? "flood extent"
+        : `${this._benchmarkHazard} extent`;
     const year = params.year ?? WORLDPOP_LATEST_YEAR;
     if (!benchmark) {
       return {
@@ -2122,10 +2168,13 @@ export class OperaControl implements IControl {
     try {
       const population = await fetchWorldPopPopulation(benchmark.water, {
         year,
+        requestTimeoutMs: 10_000,
+        maxPolls: 3,
+        pollIntervalMs: 1_000,
       });
       const rounded = Math.round(population.totalPopulation);
       const status =
-        `${rounded.toLocaleString()} people live within the flood extent ` +
+        `${rounded.toLocaleString()} people live within the ${extentLabel} ` +
         `according to WorldPop ${year}. This is modeled residential population, not an event displacement count.`;
       this._setStatus(status);
       return {
@@ -2256,6 +2305,219 @@ export class OperaControl implements IControl {
   }
 
   /**
+   * Discover and map the curated NASA layers selected by the default source
+   * policy. The catalog is queried once, then only visible layers from the
+   * highest-priority hazard products are added.
+   */
+  private async _mapDefaultNasaDisasterSources(params: {
+    hazard: string;
+    place: string;
+    start: string;
+    end: string;
+    bbox: BBox;
+  }): Promise<{
+    event?: NasaDisasterEvent;
+    layerIds: string[];
+    hazardExtent?: GeoFeatureCollection;
+    warnings: string[];
+  }> {
+    const warnings: string[] = [];
+    const layerIds: string[] = [];
+    let event: NasaDisasterEvent | null;
+    try {
+      event = await (
+        this._options.discoverDisasterEvent ?? discoverNasaDisasterEvent
+      )({
+        hazard: params.hazard,
+        place: params.place,
+        start: params.start,
+        end: params.end,
+      });
+    } catch (error) {
+      warnings.push(
+        `NASA Disasters event discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { layerIds, warnings };
+    }
+    if (!event) {
+      warnings.push(
+        `No curated NASA Disasters event matched ${params.place} for ${params.start} through ${params.end}.`,
+      );
+      return { layerIds, warnings };
+    }
+
+    const ranked = rankNasaDisasterItems(params.hazard, event.items);
+    const normalized = normalizeDisasterHazard(params.hazard);
+    const selectedCandidates =
+      normalized === "wildfire"
+        ? [
+            ranked.find((item) =>
+              /fire events data suite|\bfeds\b/i.test(item.title),
+            ),
+            ranked.find((item) =>
+              /exceedance|burn severity/i.test(item.title),
+            ) ?? ranked.find((item) => /dnbr/i.test(item.title)),
+            ranked.find((item) =>
+              /dist-alert|opera disturbance/i.test(item.title),
+            ),
+          ].filter((item): item is NonNullable<typeof item> => Boolean(item))
+        : ranked.slice(0, 3);
+    const selected = [
+      ...new Map(selectedCandidates.map((item) => [item.id, item])).values(),
+    ];
+    const curatedExtent = selected.find((item) =>
+      /exceedance|burn severity|damage|hazard/i.test(item.title),
+    )?.extent;
+    const queryBBox = curatedExtent
+      ? expandAndClipBBox(curatedExtent, params.bbox)
+      : params.bbox;
+    let hazardExtent: GeoFeatureCollection | undefined;
+
+    for (const item of selected) {
+      if (item.type !== "Web Map") continue;
+      let operationalLayers;
+      try {
+        operationalLayers = await fetchVisibleWebMapLayers(item.id);
+      } catch (error) {
+        warnings.push(
+          `${item.title}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        continue;
+      }
+      for (const [layerIndex, layer] of operationalLayers
+        .slice(0, 4)
+        .entries()) {
+        const isFedsItem = /fire events data suite|\bfeds\b/i.test(item.title);
+        const isFedsPerimeter =
+          normalized === "wildfire" &&
+          /feds|fire events data suite/i.test(layer.title) &&
+          /perimeter/i.test(layer.title);
+        if (isFedsPerimeter) {
+          try {
+            const progression = await queryArcGisGeoJson(
+              layer.url,
+              queryBBox,
+              params.start,
+              params.end,
+            );
+            if (progression.features.length === 0) {
+              warnings.push(
+                `NASA FEDS returned no fire perimeters in the event window.`,
+              );
+              continue;
+            }
+            if (hazardExtent) {
+              warnings.push(
+                `Skipped an additional FEDS perimeter layer after selecting the first usable observed extent.`,
+              );
+              continue;
+            }
+            const finalPerimeters = latestFedsPerimeters(progression);
+            const progressionId = this._addStyledGeoJsonImpactLayer({
+              id: `nasa-feds-progression-${slug(event.groupId)}`,
+              name: "FEDS Perimeter Progression",
+              data: progression,
+              geometry: "fill",
+              color: "#fb923c",
+              opacity: 0.12,
+              strokeColor: "#f97316",
+              strokeWidth: 1,
+              sourceKind: "nasa-feds-perimeter-progression",
+            });
+            const finalId = this._addStyledGeoJsonImpactLayer({
+              id: `nasa-feds-final-${slug(event.groupId)}`,
+              name: "FEDS Latest Fire Perimeters (NASA)",
+              data: finalPerimeters,
+              geometry: "fill",
+              color: "#dc2626",
+              opacity: 0.28,
+              strokeColor: "#991b1b",
+              strokeWidth: 2,
+              sourceKind: "nasa-feds-latest-perimeters",
+            });
+            if (progressionId) layerIds.push(progressionId);
+            if (finalId) layerIds.push(finalId);
+            hazardExtent = finalPerimeters;
+          } catch (error) {
+            warnings.push(
+              `NASA FEDS perimeter query failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          continue;
+        }
+        // FEDS fireline and new-pixel services are optional supplements and
+        // have lower availability than the perimeter service. Keep the default
+        // workflow bounded to the observed extent used for exposure.
+        if (normalized === "wildfire" && isFedsItem) continue;
+
+        if (/FeatureServer(?:\/\d+)?$/i.test(layer.url)) {
+          try {
+            const data = await queryArcGisGeoJson(
+              layer.url,
+              queryBBox,
+              params.start,
+              params.end,
+            );
+            if (data.features.length === 0) continue;
+            const geometry = geoJsonImpactGeometry(data);
+            if (!geometry) {
+              warnings.push(
+                `${layer.title}: no supported point, line, or polygon geometry was returned.`,
+              );
+              continue;
+            }
+            const id = this._addStyledGeoJsonImpactLayer({
+              id: `nasa-disaster-${slug(item.id)}-${layerIndex}-${slug(layer.title)}`,
+              name: layer.title,
+              data,
+              geometry,
+              color: "#e11d48",
+              opacity: 0.3,
+              strokeColor: "#9f1239",
+              strokeWidth: 1.5,
+              sourceKind: "nasa-disasters-feature-service",
+            });
+            if (id) layerIds.push(id);
+          } catch (error) {
+            warnings.push(
+              `${layer.title}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          continue;
+        }
+
+        if (/\/(?:Map|Image)Server$/i.test(layer.url)) {
+          const id = `nasa-disaster-${slug(item.id)}-${layerIndex}-${slug(layer.title)}`;
+          const registered = this._registerLayer({
+            id,
+            name: layer.title,
+            type: "raster",
+            source: {
+              type: "raster",
+              tiles: [arcGisExportTileUrl(layer.url)],
+              tileSize: 256,
+              attribution: "NASA Earthdata GIS / NASA Disasters Program",
+            },
+            nativeLayerIds: [],
+            opacity: 0.72,
+            metadata: {
+              sourceKind: "nasa-disasters-arcgis",
+              eventGroupId: event.groupId,
+              portalItemId: item.id,
+              portalUrl: item.portalUrl,
+              serviceUrl: layer.url,
+            },
+          });
+          if (registered) layerIds.push(id);
+          else
+            warnings.push(`${layer.title}: failed to register raster layer.`);
+        }
+      }
+    }
+    return { event, layerIds, hazardExtent, warnings };
+  }
+
+  /**
    * Run the default disaster workflow from a hazard, place/AOI, and dates.
    *
    * Floods receive grouped pre/post OPERA and Sentinel-2 observations plus
@@ -2265,7 +2527,8 @@ export class OperaControl implements IControl {
   async mapDisasterEventForAgent(
     params: OperaAgentDisasterEventParams,
   ): Promise<OperaAgentDisasterEventResult> {
-    const hazard = params.hazard.trim().toLowerCase();
+    const rawHazard = params.hazard?.trim();
+    const hazard = rawHazard ? normalizeDisasterHazard(rawHazard) : "";
     const warnings: string[] = [];
     if (!hazard) {
       return {
@@ -2372,6 +2635,12 @@ export class OperaControl implements IControl {
       [params.place?.trim(), hazard].filter(Boolean).join(" ") ||
       `${hazard} event`;
     this._options.fitBounds?.(bbox);
+    const sources = defaultAuthoritativeSources(hazard);
+    const news = await this.newsImpactSearchForAgent({
+      query: `${eventName} ${event.start} ${event.end} official impacts`,
+      maxResults: 6,
+    });
+    if (!news.ok) warnings.push(news.status);
 
     const addSentinelPair = async (): Promise<{
       preEvent: OperaAgentSentinel2Result;
@@ -2396,25 +2665,86 @@ export class OperaControl implements IControl {
       return { preEvent: pre, postEvent: post };
     };
 
-    if (hazard !== "flood" && !hazard.includes("flood")) {
-      const context = await this.mapDisasterContextForAgent({
+    if (hazard !== "flood") {
+      this._setStatus("Discovering authoritative disaster sources…");
+      const authoritative = await this._mapDefaultNasaDisasterSources({
         hazard,
-        eventName,
+        place: params.place?.trim() || eventName,
+        start: event.start,
+        end: event.end,
         bbox,
       });
+      warnings.push(...authoritative.warnings);
+      let context: OperaAgentDisasterContextResult | undefined;
+      let overture: OperaAgentOvertureResult | undefined;
+      let population: OperaAgentPopulationResult | undefined;
+      if (authoritative.hazardExtent?.features.length) {
+        const lock = this.lockBenchmarkFromGeoJson(
+          authoritative.hazardExtent,
+          {
+            name: eventName,
+            date: `${event.start} – ${event.end}`,
+            location: params.place,
+          },
+          {
+            label: `${authoritative.event?.title ?? "NASA"} observed ${hazard} extent`,
+            fillColor: "#dc2626",
+          },
+          { hazard, addLayer: false },
+        );
+        if (lock.ok) {
+          const focusBBox = lock.benchmark?.bbox
+            ? expandAndClipBBox(lock.benchmark.bbox, bbox)
+            : bbox;
+          this._options.fitBounds?.(focusBBox);
+          overture = await this.overtureInFloodForAgent({
+            bbox: focusBBox,
+            addLayers: true,
+            computeBuildingArea: true,
+            maxFeatures: 250_000,
+          });
+          if (!overture.ok) warnings.push(overture.status);
+          population = await this.populationInFloodForAgent({ addLayer: true });
+          if (!population.ok) warnings.push(population.status);
+        } else {
+          warnings.push(lock.status);
+        }
+      } else {
+        context = await this.mapDisasterContextForAgent({
+          hazard,
+          eventName,
+          bbox,
+        });
+      }
       const sentinel2 = await addSentinelPair();
-      const status = context.ok
-        ? `Mapped ${eventName} context. Quantified exposure requires a hazard polygon.`
-        : context.status;
+      const exposureReady = Boolean(overture?.ok || population?.ok);
+      const mappedAuthoritative = authoritative.layerIds.length > 0;
+      const hasObservedExtent = Boolean(
+        authoritative.hazardExtent?.features.length,
+      );
+      const status = exposureReady
+        ? `Mapped ${eventName} from the curated NASA event catalog and calculated exposure against the latest observed ${hazard} extent.`
+        : hasObservedExtent
+          ? `Mapped the latest observed ${hazard} extent for ${eventName}, but exposure calculations were unavailable. See workflow warnings for details.`
+          : mappedAuthoritative
+            ? `Mapped authoritative ${eventName} observations. Quantified exposure requires a usable hazard polygon.`
+            : (context?.status ??
+              `No authoritative ${eventName} hazard layer was available.`);
       this._setStatus(status);
       return {
-        ok: context.ok,
+        ok: mappedAuthoritative || Boolean(context?.ok),
         status,
         hazard,
         bbox,
         windows: { preEvent, event, postEvent },
         sentinel2,
         context,
+        overture,
+        population,
+        sources,
+        nasaEvent: authoritative.event,
+        authoritativeLayerIds: authoritative.layerIds,
+        news,
         warnings,
       };
     }
@@ -2555,6 +2885,8 @@ export class OperaControl implements IControl {
       overture,
       population,
       onePager,
+      sources,
+      news,
       warnings,
     };
   }
@@ -2604,6 +2936,7 @@ export class OperaControl implements IControl {
         opacity: Math.max(0, Math.min(1, params.opacity ?? 0.78)),
         fitBounds: false,
         bounds: scene.bbox,
+        beforeId: this._firstVectorLayerId(),
         metadata: {
           sourceKind: "sentinel-2-event-imagery",
           provider: scene.provider,
@@ -2852,7 +3185,7 @@ export class OperaControl implements IControl {
     id: string;
     name: string;
     data: GeoFeatureCollection;
-    geometry: "fill" | "line" | "extrusion";
+    geometry: "fill" | "line" | "point" | "extrusion";
     color: string;
     opacity: number;
     strokeColor?: string;
@@ -2871,7 +3204,9 @@ export class OperaControl implements IControl {
         ? [`${options.id}-fill`, `${options.id}-outline`]
         : options.geometry === "extrusion"
           ? [`${options.id}-extrusion`]
-          : [`${options.id}-line`];
+          : options.geometry === "line"
+            ? [`${options.id}-line`]
+            : [`${options.id}-circle`];
     const obsoleteLayerIds =
       options.geometry === "extrusion"
         ? [`${options.id}-fill`, `${options.id}-outline`]
@@ -2922,7 +3257,7 @@ export class OperaControl implements IControl {
           "fill-extrusion-vertical-gradient": true,
         },
       });
-    } else {
+    } else if (options.geometry === "line") {
       map.addLayer({
         id: nativeLayerIds[0],
         type: "line",
@@ -2931,6 +3266,19 @@ export class OperaControl implements IControl {
           "line-color": options.color,
           "line-opacity": options.opacity,
           "line-width": options.strokeWidth,
+        },
+      });
+    } else {
+      map.addLayer({
+        id: nativeLayerIds[0],
+        type: "circle",
+        source: sourceId,
+        paint: {
+          "circle-color": options.color,
+          "circle-opacity": options.opacity,
+          "circle-radius": Math.max(3, options.strokeWidth * 2),
+          "circle-stroke-color": options.strokeColor ?? options.color,
+          "circle-stroke-width": 1,
         },
       });
     }
@@ -2947,6 +3295,10 @@ export class OperaControl implements IControl {
         fillOpacity: options.geometry === "fill" ? options.opacity : 0,
         strokeColor: options.strokeColor ?? options.color,
         strokeWidth: options.strokeWidth,
+        circleRadius:
+          options.geometry === "point"
+            ? Math.max(3, options.strokeWidth * 2)
+            : undefined,
         ...(options.geometry === "extrusion"
           ? {
               extrusionEnabled: true,
@@ -3021,6 +3373,21 @@ export class OperaControl implements IControl {
     return id;
   }
 
+  /** Return the lowest vector style layer so imagery stays below vectors. */
+  private _firstVectorLayerId(): string | undefined {
+    const vectorTypes = new Set([
+      "circle",
+      "fill",
+      "fill-extrusion",
+      "heatmap",
+      "line",
+      "symbol",
+    ]);
+    return this._map
+      ?.getStyle()
+      .layers?.find((layer) => vectorTypes.has(layer.type))?.id;
+  }
+
   private _bottomOvertureLayerId(): string | undefined {
     const map = this._map;
     if (!map) return undefined;
@@ -3059,14 +3426,16 @@ export class OperaControl implements IControl {
     map.easeTo({ pitch: 45, duration: 800 });
   }
 
-  private _registerLayer(layer: GeoLibreNativeLayerRegistration): void {
+  private _registerLayer(layer: GeoLibreNativeLayerRegistration): boolean {
     try {
       this._options.registerLayer?.(layer);
       if (!this._registeredLayerIds.includes(layer.id)) {
         this._registeredLayerIds.push(layer.id);
       }
+      return true;
     } catch {
       this._setStatus("Failed to add layer.");
+      return false;
     }
   }
 
@@ -5042,6 +5411,46 @@ function label(text: string): HTMLElement {
 
 function slug(value: string): string {
   return value.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function geoJsonImpactGeometry(
+  data: GeoFeatureCollection,
+): "fill" | "line" | "point" | undefined {
+  const types = new Set(
+    data.features
+      .map((feature) => {
+        const geometry = feature.geometry;
+        if (!geometry || typeof geometry !== "object" || !("type" in geometry))
+          return undefined;
+        return (geometry as { type?: unknown }).type;
+      })
+      .filter((type): type is string => typeof type === "string"),
+  );
+  if (types.has("Polygon") || types.has("MultiPolygon")) return "fill";
+  if (types.has("LineString") || types.has("MultiLineString")) return "line";
+  if (types.has("Point") || types.has("MultiPoint")) return "point";
+  return undefined;
+}
+
+/** Expand a curated product extent slightly and clip it to the requested AOI. */
+function expandAndClipBBox(extent: BBox, requested: BBox): BBox {
+  const padX = Math.max((extent[2] - extent[0]) * 0.15, 0.2);
+  const padY = Math.max((extent[3] - extent[1]) * 0.15, 0.2);
+  const expanded: BBox = [
+    extent[0] - padX,
+    extent[1] - padY,
+    extent[2] + padX,
+    extent[3] + padY,
+  ];
+  const clipped: BBox = [
+    Math.max(expanded[0], requested[0]),
+    Math.max(expanded[1], requested[1]),
+    Math.min(expanded[2], requested[2]),
+    Math.min(expanded[3], requested[3]),
+  ];
+  return clipped[0] < clipped[2] && clipped[1] < clipped[3]
+    ? clipped
+    : requested;
 }
 
 function shorten(value: string, max = 28): string {

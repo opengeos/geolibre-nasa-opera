@@ -183,7 +183,11 @@ The NASA OPERA plugin registers OPERA-specific agent tools:
   for temporal rasterio/xarray workflows.
 - `map_disaster_event` runs the standard disaster workflow from only a hazard,
   place or AOI, and event dates. Flood requests add grouped pre/post OPERA and
-  Sentinel-2 layers, Overture context and impacts, and WorldPop exposure.
+  Sentinel-2 layers, Overture context and impacts, and WorldPop exposure. When
+  the user does not name sources, it applies a deterministic, hazard-specific
+  authoritative source policy. Wildfires prioritize the matching NASA
+  Disasters event, FEDS perimeters, NASA burn-severity products, and OPERA DIST
+  before calculating exposure.
 - `map_disaster_context` maps the existing GeoLibre Overture building and
   transportation layers plus WorldPop population for any disaster AOI.
 - `sentinel2_event_imagery` searches the public Microsoft Planetary Computer
@@ -258,7 +262,20 @@ bundled and the panel falls back to manual key entry.
 
 For a location and event date or date range, `map_disaster_event` runs the
 standard workflow without requiring the user to name datasets or analysis
-steps. Flood requests create separate pre/post OPERA and Sentinel-2 layer
+steps. The default source order is an authoritative hazard observation,
+corroborating satellite change, Overture buildings and transportation,
+WorldPop modeled population, then attributable official reports or news. The
+result keeps observed hazard, modeled exposure, and confirmed impacts separate.
+
+For wildfires, the tool searches NASA Earthdata GIS for the matching curated
+NASA Disasters event group. It adds only visible, relevant layers from FEDS,
+burn-severity, and OPERA DIST Web Maps. When a time-filtered FEDS perimeter is
+available, the latest perimeter for each fire becomes the exposure boundary and
+Overture and WorldPop queries are narrowed to that event extent. If a perimeter
+or exposure service is unavailable, the workflow reports that limitation and
+does not label general context as impact.
+
+Flood requests create separate pre/post OPERA and Sentinel-2 layer
 groups, map all Overture buildings and typed transportation in the requested
 AOI, highlight flooded buildings and affected roads, and calculate open-access
 WorldPop exposure. Contextual assets and optical imagery are not labeled as
@@ -288,9 +305,10 @@ human-QAed flood map, into interactive analysis layers and a shareable one-pager
      existing Overture Maps plugin for context and adds separate styled,
      interactive impact layers.
    - `population_in_flood` uses the public WorldPop statistics API to calculate
-     modeled residential population within the flood extent and adds a styled
-     WorldPop 100 m population image. This figure is population exposure, not
-     deaths, evacuations, or displacement.
+     modeled residential population within the flood extent, automatically
+     falling back to polygon statistics from the WorldPop ArcGIS ImageServer,
+     and adds a styled WorldPop 100 m population image. This figure is
+     population exposure, not deaths, evacuations, or displacement.
    - `sentinel2_event_imagery` selects the least-cloudy Sentinel-2 L2A scene in
      the event window and adds its public true-color TileJSON layer. If no scene
      meets the cloud threshold, the workflow reports the limitation.
@@ -318,20 +336,30 @@ truncated.
 
 ### News search proxy (Tavily)
 
-`news_impact_search` calls the Tavily search API through a small Cloudflare
-Worker so the Tavily key stays server-side (`workers/news-proxy.js`):
+`news_impact_search` calls Tavily through a server-side proxy. In a Docker
+GeoLibre deployment, the recommended setup is to store `TAVILY_API_KEY` as a
+secret on the `geolibre-ai-proxy` Worker. The container automatically exposes
+that Worker's `/tavily` route to this plugin through the authenticated,
+same-origin `/ai` route. Do not pass `TAVILY_API_KEY` to the container.
+
+For a standalone plugin deployment, the included news Worker is an alternative:
 
 ```bash
 npx wrangler secret put TAVILY_API_KEY --config wrangler.news.toml
 npm run news-proxy:deploy      # or: npm run news-proxy:dev  (local, port 8788)
 ```
 
-Point the plugin at the deployed Worker with the `VITE_NEWS_PROXY_ENDPOINT`
-build variable, or the `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` window global.
+Point the plugin at a standalone Worker with the `VITE_NEWS_PROXY_ENDPOINT`
+build variable, the `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` window global, or
+GeoLibre's `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` Docker variable.
+At runtime, the plugin checks an explicit tool override first, then the window
+global, `__GEOLIBRE_DEPLOYMENT_ENV__.GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT`,
+and finally the build variable. The older deployment key
+`VITE_NASA_OPERA_NEWS_PROXY_ENDPOINT` remains supported for compatibility.
 Without it, `news_impact_search` returns a clear "not configured" message and the
 rest of the workflow (benchmark, buildings, one-pager) still works.
 
-The Worker fails closed: `ALLOWED_ORIGINS` defaults to `http://localhost:5173`
+The Worker fails closed: `ALLOWED_ORIGINS` defaults to local development origins
 (set it to your deployed origin(s), or `*` only if you intentionally want any
 origin to use the proxy). To keep the proxy from being an open Tavily relay for
 non-browser clients, optionally set a `CLIENT_SECRET` secret and have callers

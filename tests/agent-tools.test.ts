@@ -59,7 +59,13 @@ describe("OPERA agent tools", () => {
       "Navigating the map or adding a basemap is preparation, not completion",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
-      "automatically downloads a one-page flood assessment",
+      "Flood workflows also download a one-page assessment",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "non-flood workflows return mapped observations and exposure results without a one-page report",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "If the user explicitly names sources, use the relevant individual tools",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "use 2024-10-27 through 2024-11-05",
