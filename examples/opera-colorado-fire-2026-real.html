@@ -43,7 +43,6 @@
   .legend .legend-title { font-size:9px; font-weight:600; color:#334155; margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .scalebar { position:absolute; left:14px; bottom: 14px; background: rgba(255,255,255,0.9); border:1px solid #cbd5e1; border-radius: 4px; padding: 4px 6px; font-size: 10px; color:#0b1220; }
   .scalebar .bar { height: 6px; background:#0b1220; margin-top: 3px; }
-  .print-map-icon, .print-map-attribution { display:none; }
   .exposure { text-align:center; padding: 8px 0 12px; border-bottom:1px solid #cbd5e1; margin-bottom: 10px; }
   .exposure-value { font-size: 30px; font-weight: 800; color:#1d4ed8; line-height:1; }
   .exposure-label { font-size: 12px; color:#334155; }
@@ -62,7 +61,7 @@
   .footer { border-top:1px solid #d5dbe5; padding: 8px 20px; font-size: 10px; color:#64748b; display:flex; justify-content:space-between; gap: 12px; flex-wrap: wrap; }
   .disclaimer { flex-basis:100%; padding-top:6px; border-top:1px solid #e2e8f0; color:#475569; font-weight:600; }
   @media (max-width: 900px) { .grid { grid-template-columns:1fr; } .map { grid-row:1; } .brand-copy { display:none; } }
-  @media print { @page { size: landscape; margin: 8mm; } body { background:#fff; } .toolbar { display:none; } .page { border:none; box-shadow:none; margin:0; max-width:none; } .grid { grid-template-columns:.78fr 1.75fr .92fr; padding-bottom:8px; } .panel { padding:10px; } .panel.bg { grid-column:1; grid-row:1; font-size:11px; line-height:1.3; } .panel.map { grid-column:2; grid-row:1; } .panel.impact-panel { grid-column:3; grid-row:1; } #assessment-map { min-height:310px; } #overview-map { position:relative; height:90px; margin-top:6px; } #overview-map > svg { visibility:hidden; } #overview-map::after { content:""; position:absolute; z-index:10; left:25%; top:25%; width:50%; height:50%; border:2px solid #1d4ed8; background:rgba(37,99,235,.2); -webkit-print-color-adjust:exact; print-color-adjust:exact; } .print-map-icon { position:absolute; right:7px; z-index:20; display:flex; width:30px; height:30px; align-items:center; justify-content:center; border-radius:4px; background:#fff; color:#1f2937; box-shadow:0 0 0 1px rgba(0,0,0,.1); -webkit-print-color-adjust:exact; print-color-adjust:exact; } .print-map-icon svg { width:22px; height:22px; } .print-map-icon.fullscreen { top:7px; } .print-map-icon.globe { top:75px; } .print-map-attribution { position:absolute; z-index:19; right:1px; bottom:1px; left:70px; height:18px; display:flex; align-items:center; justify-content:flex-end; padding:0 5px; overflow:hidden; background:rgba(255,255,255,.94); color:#334155; font-size:7px; white-space:nowrap; -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+  @media print { @page { size: landscape; margin: 8mm; } body { background:#fff; } .toolbar { display:none; } .page { border:none; box-shadow:none; margin:0; max-width:none; } .grid { grid-template-columns:.78fr 1.75fr .92fr; padding-bottom:8px; } .panel { padding:10px; } .panel.bg { grid-column:1; grid-row:1; font-size:11px; line-height:1.3; } .panel.map { grid-column:2; grid-row:1; } .panel.impact-panel { grid-column:3; grid-row:1; } #assessment-map { min-height:310px; } #overview-map { position:relative; height:90px; margin-top:6px; } #overview-map > svg { visibility:hidden; } #overview-map::after { content:""; position:absolute; z-index:10; left:25%; top:25%; width:50%; height:50%; border:2px solid #1d4ed8; background:rgba(37,99,235,.2); -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 </style>
 </head>
 <body>
@@ -89,8 +88,6 @@
         <h2>Observed wildfire extent</h2>
         <div class="map-wrap">
           <iframe id="assessment-map" class="map-img" title="Interactive wildfire event map" data-src="https://web.geolibre.app/?maponly&amp;embed=1&amp;welcome=0" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" allow="fullscreen; geolocation" allowfullscreen></iframe>
-          <span class="print-map-icon fullscreen" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></span><span class="print-map-icon globe" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18M5.5 7.5h13M5.5 16.5h13"/></svg></span>
-          <span class="print-map-attribution">NASA Earthdata GIS · OpenFreeMap · © OpenStreetMap contributors</span>
           <div class="legend"><div class="legend-title">Colorado Fires July 2026 observed wildfire extent</div><svg width="150" height="26" viewBox="0 0 150 26" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="4" width="14" height="12" rx="2" fill="#dc2626" stroke="rgba(0,0,0,0.25)"/><text x="24" y="14" font-size="11" fill="#0b1220">Colorado Fires July 2026 observed wildfire extent</text></svg></div>
           
         </div>
