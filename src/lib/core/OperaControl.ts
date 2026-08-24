@@ -174,6 +174,19 @@ export interface OperaControlOptions {
    * this is unset and {@link OperaControl.expand} drives the internal panel.
    */
   onRequestReveal?: () => void;
+  /** Host-native text export (Tauri save dialog, browser picker/download). */
+  exportTextFile?: (
+    filename: string,
+    content: string,
+    options?: {
+      description?: string;
+      extensions?: string[];
+      mimeType?: string;
+      promptName?: boolean;
+    },
+  ) => void;
+  /** Redacted GeoLibre project snapshot for the hosted map-only embed. */
+  getProjectSnapshot?: () => Record<string, unknown> | undefined;
 }
 
 export interface OperaAgentSearchParams {
@@ -2811,6 +2824,7 @@ export class OperaControl implements IControl {
               : "No matching NASA Earthdata GIS event catalog was available, so mapped layers are contextual. ") +
             "Sentinel-2 imagery provides pre/post optical context. Exposure figures are included only when they were calculated against a usable observed hazard polygon; they are not field-validated damage estimates.",
           mapImageDataUrl,
+          geoLibreProject: this._options.getProjectSnapshot?.(),
           benchmark: locked
             ? {
                 bbox: locked.bbox,
@@ -3277,11 +3291,13 @@ export class OperaControl implements IControl {
       params.mapSnapshotDataUrl ??
       (await this.captureMapSnapshotForAgent()) ??
       undefined;
+    const geoLibreProject = this._options.getProjectSnapshot?.();
     const html = buildOnePagerHtml({
       title: params.title ?? `${benchmark.event.name}: OPERA flood assessment`,
       event: benchmark.event,
       narrative: params.narrative,
       mapImageDataUrl,
+      geoLibreProject,
       benchmark: {
         bbox: benchmark.bbox,
         areaKm2: benchmark.areaKm2,
@@ -5411,6 +5427,22 @@ export class OperaControl implements IControl {
     content: string,
     type: string,
   ): void {
+    if (this._options.exportTextFile) {
+      const extension = filename.split(".").pop()?.toLowerCase() || "txt";
+      const description =
+        extension === "html"
+          ? "Interactive HTML assessment"
+          : extension === "md"
+            ? "Markdown report"
+            : "Text file";
+      this._options.exportTextFile(filename, content, {
+        description,
+        extensions: [extension],
+        mimeType: type,
+        promptName: true,
+      });
+      return;
+    }
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

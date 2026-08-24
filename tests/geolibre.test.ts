@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GeoLibreAppAPI, GeoLibreControl } from "../src/lib/geolibre/host-api";
-import type { OperaState } from "../src/lib/core/OperaControl";
+import type { OperaControl, OperaState } from "../src/lib/core/OperaControl";
 
 async function freshPlugin() {
   vi.resetModules();
@@ -107,6 +107,69 @@ describe("GeoLibre plugin entry", () => {
       }),
       "top-right",
     );
+  });
+
+  it("routes one-pager exports through the host save dialog capability", async () => {
+    const plugin = await freshPlugin();
+    const exportTextFile = vi.fn();
+    const app = { ...appStub(), exportTextFile };
+    plugin.activate(app);
+    const control = vi.mocked(app.addMapControl).mock.calls[0][0] as unknown as OperaControl;
+    control.lockBenchmarkFromGeoJson(
+      {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            properties: {},
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [0, 0],
+                  [1, 0],
+                  [1, 1],
+                  [0, 1],
+                  [0, 0],
+                ],
+              ],
+            },
+          },
+        ],
+      },
+      { name: "Save dialog test" },
+    );
+
+    await control.buildOnePagerForAgent();
+
+    expect(exportTextFile).toHaveBeenCalledWith(
+      "opera-one-pager-Save-dialog-test.html",
+      expect.stringContaining("<!doctype html>"),
+      expect.objectContaining({
+        description: "Interactive HTML assessment",
+        extensions: ["html"],
+        mimeType: "text/html",
+      }),
+    );
+  });
+
+  it("passes the host project snapshot into the one-pager", async () => {
+    const plugin = await freshPlugin();
+    const project = { name: "Live project", layers: [{ id: "opera-disaster-layer" }] };
+    const exportTextFile = vi.fn();
+    const app = { ...appStub(), getProjectSnapshot: () => project, exportTextFile };
+    plugin.activate(app);
+    const control = vi.mocked(app.addMapControl).mock.calls[0][0] as unknown as OperaControl;
+    control.lockBenchmarkFromGeoJson(
+      { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[[0,0],[1,0],[1,1],[0,1],[0,0]]] } }] },
+      { name: "Embed test" },
+    );
+
+    await control.buildOnePagerForAgent();
+
+    const html = exportTextFile.mock.calls[0][1] as string;
+    expect(html).toContain("geolibre:load-project");
+    expect(html).toContain("opera-disaster-layer");
   });
 
   it("persists combined OPERA and GeoAgent project state", async () => {

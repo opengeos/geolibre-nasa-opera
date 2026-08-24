@@ -227,6 +227,14 @@ export interface GeoLibreControl {
   onRemove(...args: never[]): void;
 }
 
+/** File-type hints forwarded to GeoLibre's native/browser save implementation. */
+export interface GeoLibreFileDialogOptions {
+  description?: string;
+  extensions?: string[];
+  mimeType?: string;
+  promptName?: boolean;
+}
+
 /**
  * The surface GeoLibre exposes to an active plugin.
  *
@@ -250,6 +258,14 @@ export interface GeoLibreAppAPI<
   ) => boolean;
   /** Remove a previously added control from the map. */
   removeMapControl: (control: TControl) => void;
+  /** Save text through the host (native save dialog in Tauri). */
+  exportTextFile?: (
+    filename: string,
+    content: string,
+    options?: GeoLibreFileDialogOptions,
+  ) => void;
+  /** Return a redacted, serializable snapshot of the current project. */
+  getProjectSnapshot?: () => Record<string, unknown>;
   /**
    * Add a GeoJSON dataset as a native MapLibre layer the host owns and renders.
    * Used here to draw OPERA granule footprints.

@@ -109,6 +109,9 @@ function createControl(app: AppAPI): OperaControl {
     },
     fitBounds: (bounds) => app.fitBounds?.(bounds),
     getMapBounds: () => readMapBounds(app),
+    exportTextFile: (filename, content, options) =>
+      app.exportTextFile?.(filename, content, options),
+    getProjectSnapshot: () => app.getProjectSnapshot?.(),
     onAgentAoiChange: () => syncGeoAgentAoiControls(),
     // In docked mode, agent actions that need the UI visible ask the host to
     // reveal the right panel instead of driving the floating panel.
