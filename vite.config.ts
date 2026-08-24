@@ -32,6 +32,12 @@ export default defineConfig({
   // this define is a no-op for the npm build. See src/vite-env.d.ts.
   define: {
     __OPERA_OPENAI_API_KEY__: JSON.stringify(process.env.OPENAI_API_KEY ?? ""),
+    __OPERA_CLI_PROXY_API_KEY__: JSON.stringify(
+      process.env.CLI_PROXY_API_KEY ?? "",
+    ),
+    __OPERA_CLI_PROXY_URL__: JSON.stringify(
+      process.env.CLI_PROXY_UPSTREAM ?? "https://cli-proxy.opengeos.org",
+    ),
   },
   build: {
     lib: {

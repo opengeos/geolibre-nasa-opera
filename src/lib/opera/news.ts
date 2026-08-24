@@ -83,9 +83,14 @@ export interface SearchNewsOptions {
   topic?: "general" | "news";
   /** For the "news" topic, how many days back to search (Worker default 3650). */
   days?: number;
+  /** GPT-native web search by default; Tavily only for an explicit request. */
+  engine?: "gpt" | "tavily";
+  /** Direct GPT search settings used by controlled local builds. */
+  gptApiKey?: string;
+  gptBaseUrl?: string;
   /** Injectable fetch for testing. */
   fetchImpl?: typeof fetch;
-  /** Timeout in ms (default 25s). */
+  /** Timeout in ms (default 15s). */
   timeoutMs?: number;
 }
 
@@ -98,6 +103,10 @@ interface TavilyResult {
 interface TavilyResponse {
   results?: TavilyResult[];
   answer?: string;
+}
+
+interface MessagesResponse {
+  content?: Array<{ type?: string; text?: string }>;
 }
 
 function publisherFromUrl(url: string): string {
@@ -118,6 +127,19 @@ export async function searchNews(
 ): Promise<{ results: NewsResult[]; answer?: string; endpoint: string }> {
   const endpoint = resolveNewsProxyEndpoint(options.endpoint);
   if (!endpoint) {
+    const apiKey =
+      options.gptApiKey ??
+      (typeof __OPERA_CLI_PROXY_API_KEY__ === "string"
+        ? __OPERA_CLI_PROXY_API_KEY__.trim()
+        : "");
+    const baseUrl =
+      options.gptBaseUrl ??
+      (typeof __OPERA_CLI_PROXY_URL__ === "string"
+        ? __OPERA_CLI_PROXY_URL__.trim()
+        : "");
+    if (options.engine !== "tavily" && apiKey && baseUrl) {
+      return searchWithGptMessages(query, { ...options, apiKey, baseUrl });
+    }
     throw new Error(
       "News proxy is not configured. Set VITE_NEWS_PROXY_ENDPOINT (or the " +
         "GeoLibre Docker news proxy runtime setting) to the deployed news Worker URL.",
@@ -127,10 +149,11 @@ export async function searchNews(
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
-    options.timeoutMs ?? 25000,
+    options.timeoutMs ?? 15000,
   );
   try {
-    const response = await doFetch(`${endpoint}/tavily`, {
+    const route = options.engine === "tavily" ? "tavily" : "search";
+    const response = await doFetch(`${endpoint}/${route}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -167,4 +190,71 @@ export async function searchNews(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function searchWithGptMessages(
+  query: string,
+  options: SearchNewsOptions & { apiKey: string; baseUrl: string },
+): Promise<{ results: NewsResult[]; answer?: string; endpoint: string }> {
+  const endpoint = `${options.baseUrl.replace(/\/+$/, "")}/v1/messages`;
+  const doFetch = options.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? 15000,
+  );
+  const maxResults = Math.min(Math.max(options.maxResults ?? 6, 1), 20);
+  const recency =
+    options.topic === "news"
+      ? ` Only use sources published within the last ${options.days ?? 14} days.`
+      : "";
+  let response: Response;
+  try {
+    response = await doFetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "gpt-5.6-luna",
+        max_tokens: 4096,
+        tools: [
+          { type: "web_search_20250305", name: "web_search", max_uses: 4 },
+        ],
+        system:
+          "Use web_search and return one JSON object only with schema " +
+          '{"answer":string,"results":[{"title":string,"url":string,"content":string,"published_date":string}]}. ' +
+          `Return at most ${maxResults} citable results and never invent URLs.`,
+        messages: [{ role: "user", content: `${query}${recency}` }],
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) throw new Error(`GPT web search responded ${response.status}`);
+  const payload = (await response.json()) as MessagesResponse;
+  const text = (payload.content ?? [])
+    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n");
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    throw new Error("GPT web search returned no structured results");
+  }
+  const data = JSON.parse(text.slice(start, end + 1)) as TavilyResponse;
+  const results = (data.results ?? [])
+    .filter((item): item is TavilyResult & { url: string } => Boolean(item.url))
+    .slice(0, maxResults)
+    .map((item) => ({
+      title: item.title ?? "",
+      sourceUrl: item.url,
+      publisher: publisherFromUrl(item.url),
+      date: item.published_date,
+      snippet: item.content ?? "",
+    }));
+  return { results, answer: data.answer, endpoint };
 }

@@ -102,6 +102,34 @@ describe("authoritative disaster sources", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
+  it("falls back to NASA EGIS item search when group indexing misses", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/community/groups")) {
+        return Response.json({ results: [] });
+      }
+      return Response.json({
+        results: [
+          {
+            id: "feds-colorado",
+            title: "Fire Events Data Suite (FEDS) for Colorado Fires July 2026",
+            type: "Web Map",
+            tags: ["NASA", "Wildfire"],
+          },
+        ],
+      });
+    });
+
+    const event = await discoverNasaDisasterEvent(eventParams, fetcher);
+    expect(event?.groupId).toContain("catalog-");
+    expect(event?.items.map((item) => item.id)).toContain("feds-colorado");
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        String(url).includes("/sharing/rest/search?"),
+      ),
+    ).toBe(true);
+  });
+
   it("skips unrelated search results before selecting a relevant group", async () => {
     const fetcher = vi
       .fn()

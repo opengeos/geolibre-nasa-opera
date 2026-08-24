@@ -62,6 +62,28 @@ interface ArcGisItem {
   extent?: unknown;
 }
 
+function normalizeDisasterItems(items: ArcGisItem[]): NasaDisasterItem[] {
+  return items
+    .filter(
+      (item): item is ArcGisItem & {
+        id: string;
+        title: string;
+        type: string;
+      } => Boolean(item.id && item.title && item.type),
+    )
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      type: item.type,
+      url: item.url || undefined,
+      portalUrl: `${PORTAL}/home/item.html?id=${encodeURIComponent(item.id)}`,
+      tags: (item.tags ?? []).filter(
+        (tag): tag is string => typeof tag === "string" && tag.length > 0,
+      ),
+      extent: parseArcGisExtent(item.extent),
+    }));
+}
+
 interface ArcGisLayerNode {
   title?: string;
   url?: string;
@@ -356,8 +378,44 @@ export async function discoverNasaDisasterEvent(
       lastError = error;
     }
   }
-  if (!group && lastError) throw lastError;
-  if (!group?.id || !group.title) return null;
+  if (!group?.id || !group.title) {
+    // ArcGIS group search can lag behind item indexing or intermittently omit
+    // an otherwise public event group. Fall back to the Earthdata GIS content
+    // catalog so event-specific NASA Web Maps still win over generic imagery.
+    for (const query of eventSearchQueries(
+      params.hazard,
+      params.place,
+      params.start,
+      params.end,
+    )) {
+      try {
+        const itemsUrl = `${SHARING}/search?f=json&num=100&sortField=modified&sortOrder=desc&q=${encodeURIComponent(query)}`;
+        const response = await fetchJsonWithTimeout<
+          ArcGisSearchResponse<ArcGisItem>
+        >(fetcher, itemsUrl, requestTimeoutMs);
+        if (!response.ok) continue;
+        const matching = (response.data?.results ?? []).filter((item) =>
+          groupMatchesEvent(
+            { id: item.id, title: item.title },
+            params,
+          ),
+        );
+        const items = normalizeDisasterItems(matching);
+        if (items.length > 0) {
+          return {
+            groupId: `catalog-${params.start}-${params.place}`,
+            title: `${params.place} ${normalizeDisasterHazard(params.hazard)} ${params.start.slice(0, 7)}`,
+            portalUrl: `${PORTAL}/home/search.html?q=${encodeURIComponent(query)}`,
+            items,
+          };
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) throw lastError;
+    return null;
+  }
 
   const itemsUrl = `${SHARING}/content/groups/${encodeURIComponent(group.id)}/search?f=json&num=100&sortField=added&sortOrder=desc`;
   const itemsResponse = await fetchJsonWithTimeout<
@@ -366,24 +424,7 @@ export async function discoverNasaDisasterEvent(
   if (!itemsResponse.ok)
     throw new Error(`NASA event catalog failed (${itemsResponse.status}).`);
   const payload = itemsResponse.data ?? {};
-  const items = (payload.results ?? [])
-    .filter(
-      (
-        item,
-      ): item is ArcGisItem & { id: string; title: string; type: string } =>
-        Boolean(item.id && item.title && item.type),
-    )
-    .map((item) => ({
-      id: item.id,
-      title: item.title,
-      type: item.type,
-      url: item.url || undefined,
-      portalUrl: `${PORTAL}/home/item.html?id=${encodeURIComponent(item.id)}`,
-      tags: (item.tags ?? []).filter(
-        (tag): tag is string => typeof tag === "string" && tag.length > 0,
-      ),
-      extent: parseArcGisExtent(item.extent),
-    }));
+  const items = normalizeDisasterItems(payload.results ?? []);
   return {
     groupId: group.id,
     title: group.title,

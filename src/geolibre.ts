@@ -129,6 +129,14 @@ const BUNDLED_OPENAI_API_KEY =
   typeof __OPERA_OPENAI_API_KEY__ === "string"
     ? __OPERA_OPENAI_API_KEY__.trim()
     : "";
+const BUNDLED_CLI_PROXY_API_KEY =
+  typeof __OPERA_CLI_PROXY_API_KEY__ === "string"
+    ? __OPERA_CLI_PROXY_API_KEY__.trim()
+    : "";
+const BUNDLED_CLI_PROXY_URL =
+  typeof __OPERA_CLI_PROXY_URL__ === "string"
+    ? __OPERA_CLI_PROXY_URL__.trim()
+    : "";
 
 function browserOrigin(): string | undefined {
   if (typeof window === "undefined") return undefined;
@@ -161,16 +169,8 @@ function readManagedProxyConfig(): { baseURL: string; modelId: string } | null {
   if (!proxyUrl) return null;
   return {
     baseURL: proxyBaseUrl(proxyUrl, browserOrigin()),
-    modelId: env.VITE_GEOLIBRE_AI_MODEL?.trim() || "openai/gpt-5.5",
+    modelId: env.VITE_GEOLIBRE_AI_MODEL?.trim() || "openai/gpt-5.6-luna",
   };
-}
-
-function storageGet(key: string): string | null {
-  try {
-    return globalThis.sessionStorage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
 }
 
 function storageSet(key: string, value: string): void {
@@ -181,22 +181,15 @@ function storageSet(key: string, value: string): void {
   }
 }
 
-function seedManagedProxyStorage(config: {
+function seedProxyStorage(config: {
   baseURL: string;
   modelId: string;
+  apiKey: string;
 }): void {
-  const providerKey = `${GEOAGENT_STORAGE_PREFIX}.provider`;
-  const storedProvider = storageGet(providerKey);
-  const storedProviderKey = storedProvider
-    ? storageGet(`${GEOAGENT_STORAGE_PREFIX}.${storedProvider}.api_key`)
-    : null;
-
-  if (!storedProvider || !storedProviderKey) {
-    storageSet(providerKey, "openai-compatible");
-  }
+  storageSet(`${GEOAGENT_STORAGE_PREFIX}.provider`, "openai-compatible");
   storageSet(
     `${GEOAGENT_STORAGE_PREFIX}.openai-compatible.api_key`,
-    MANAGED_PROXY_API_KEY,
+    config.apiKey,
   );
   storageSet(
     `${GEOAGENT_STORAGE_PREFIX}.baseUrl.openai-compatible`,
@@ -217,6 +210,26 @@ function managedProxyState(config: {
     modelId: config.modelId,
     baseUrl: config.baseURL,
   };
+}
+
+/** Supply temporal and network-capability facts that the model cannot infer. */
+function runtimeSystemPrompt(now = new Date()): string {
+  const localDate = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }).format(now);
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+
+  return `Runtime facts and capability boundaries:
+- Today's local date is ${localDate} (${year}-${month}-${day}). Use this date for every question involving today, current dates, relative dates, or recency. Never guess a different date from model training data.
+- You have tool-mediated internet access, including GPT-native web search through search_realtime_disasters, NASA CMR/OPERA, titiler-cmr, supported imagery/catalog services, and map data services. You do not have unrestricted general-purpose web browsing outside those tools. Never use tavily_search unless the user explicitly asks for Tavily by name.
+- If asked whether you have internet access, explain that you can search real-time disasters and access the other supported live services through tools. Do not claim unrestricted browsing, and do not imply that another service is reachable unless an available tool supports it.
+
+${OPERA_AGENT_SYSTEM_PROMPT}`;
 }
 
 function installManagedProxyModelFactory(
@@ -265,13 +278,24 @@ function installManagedProxyModelFactory(
 
 function createGeoAgentControl(): GeoAgentControl {
   const managedProxy = readManagedProxyConfig();
-  if (managedProxy) seedManagedProxyStorage(managedProxy);
+  const bundledCliProxy =
+    !managedProxy && BUNDLED_CLI_PROXY_API_KEY && BUNDLED_CLI_PROXY_URL
+      ? {
+          baseURL: proxyBaseUrl(BUNDLED_CLI_PROXY_URL),
+          modelId: "gpt-5.6-luna",
+          apiKey: BUNDLED_CLI_PROXY_API_KEY,
+        }
+      : null;
+  const proxyConfig = managedProxy
+    ? { ...managedProxy, apiKey: MANAGED_PROXY_API_KEY }
+    : bundledCliProxy;
+  if (proxyConfig) seedProxyStorage(proxyConfig);
   const geoAgentOptions: GeoAgentControlOptions = {
-    ...(managedProxy
+    ...(proxyConfig
       ? {
           defaultProvider: "openai-compatible",
-          defaultModel: { "openai-compatible": managedProxy.modelId },
-          apiKeys: { "openai-compatible": MANAGED_PROXY_API_KEY },
+          defaultModel: { "openai-compatible": proxyConfig.modelId },
+          apiKeys: { "openai-compatible": proxyConfig.apiKey },
         }
       : BUNDLED_OPENAI_API_KEY
         ? { apiKeys: { "openai-responses": BUNDLED_OPENAI_API_KEY } }
@@ -285,7 +309,7 @@ function createGeoAgentControl(): GeoAgentControl {
     allowDestructiveToolsDefault:
       pendingGeoAgentState?.allowDestructiveTools ?? true,
     showPermissionToggles: false,
-    customSystemPrompt: OPERA_AGENT_SYSTEM_PROMPT,
+    customSystemPrompt: runtimeSystemPrompt(),
     customTools: () => createOperaAgentTools(() => operaControl),
   };
   const next = new GeoAgentControl({
@@ -296,10 +320,10 @@ function createGeoAgentControl(): GeoAgentControl {
   if (pendingGeoAgentState) {
     next.setState({
       ...pendingGeoAgentState,
-      ...(managedProxy ? managedProxyState(managedProxy) : {}),
+      ...(proxyConfig ? managedProxyState(proxyConfig) : {}),
     });
-  } else if (managedProxy) {
-    next.setState(managedProxyState(managedProxy));
+  } else if (proxyConfig) {
+    next.setState(managedProxyState(proxyConfig));
   }
   return next;
 }

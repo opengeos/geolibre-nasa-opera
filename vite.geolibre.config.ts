@@ -66,6 +66,12 @@ export default defineConfig({
   // See src/vite-env.d.ts and src/geolibre.ts.
   define: {
     __OPERA_OPENAI_API_KEY__: JSON.stringify(process.env.OPENAI_API_KEY ?? ""),
+    __OPERA_CLI_PROXY_API_KEY__: JSON.stringify(
+      process.env.CLI_PROXY_API_KEY ?? "",
+    ),
+    __OPERA_CLI_PROXY_URL__: JSON.stringify(
+      process.env.CLI_PROXY_UPSTREAM ?? "https://cli-proxy.opengeos.org",
+    ),
   },
   build: {
     lib: {

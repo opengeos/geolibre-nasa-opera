@@ -568,6 +568,12 @@ export interface OperaAgentNewsParams {
   query: string;
   /** Max results to return (1-20). */
   maxResults?: number;
+  /** Restrict retrieval to recent news coverage. */
+  topic?: "general" | "news";
+  /** Number of recent days to search when topic is news. */
+  days?: number;
+  /** Search engine; GPT-native web search is the default. */
+  engine?: "gpt" | "tavily";
 }
 
 export interface OperaAgentNewsResult {
@@ -671,6 +677,21 @@ function defaultDateRange(): { start: string; end: string } {
   return { start, end };
 }
 
+function placeFromEventLabel(label: string, hazard: string): string {
+  const hazardWords = [hazard, "fire", "fires", "wildfire", "wildfires"]
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  return label
+    .replace(new RegExp(`\\b(?:${hazardWords})\\b`, "gi"), " ")
+    .replace(
+      /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/gi,
+      " ",
+    )
+    .replace(/\b(?:19|20)\d{2}\b/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /**
  * MapLibre control hosting the NASA OPERA search + display UI.
  *
@@ -746,6 +767,7 @@ export class OperaControl implements IControl {
   // Zonal statistics (titiler-cmr /statistics) UI.
   private _statsBtn?: HTMLButtonElement;
   private _statsPanel?: HTMLElement;
+  private _resultsSection?: HTMLElement;
 
   // Benchmark import UI.
   private _benchmarkStatus?: HTMLElement;
@@ -2539,6 +2561,12 @@ export class OperaControl implements IControl {
       };
     }
 
+    const place =
+      params.place?.trim() ||
+      (params.eventName?.trim()
+        ? placeFromEventLabel(params.eventName.trim(), hazard)
+        : "");
+
     let bbox: BBox | undefined;
     const drawnAoi = this._state.agentAoiBBox
       ? normalizeAgentBBox(this._state.agentAoiBBox)
@@ -2548,19 +2576,35 @@ export class OperaControl implements IControl {
     } else if (params.bbox !== undefined) {
       bbox = normalizeAgentBBox(params.bbox);
       if (!bbox) {
-        return {
-          ok: false,
-          status: "Invalid disaster bbox. Use [west,south,east,north].",
-          hazard,
-          warnings,
-        };
+        if (!place) {
+          return {
+            ok: false,
+            status: "Invalid disaster bbox. Use [west,south,east,north].",
+            hazard,
+            warnings,
+          };
+        }
+        warnings.push(
+          "Ignored an invalid model-supplied bbox and resolved the named place instead.",
+        );
+        this._setStatus(`Locating ${place}…`);
+        try {
+          const geocoded = await (
+            this._options.geocodePlace ?? geocodePlaceBounds
+          )(place);
+          bbox = normalizeAgentBBox(geocoded.bbox);
+        } catch (error) {
+          warnings.push(
+            `Place lookup failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-    } else if (params.place?.trim()) {
-      this._setStatus(`Locating ${params.place.trim()}…`);
+    } else if (place) {
+      this._setStatus(`Locating ${place}…`);
       try {
         const geocoded = await (
           this._options.geocodePlace ?? geocodePlaceBounds
-        )(params.place.trim());
+        )(place);
         bbox = normalizeAgentBBox(geocoded.bbox);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -2576,8 +2620,8 @@ export class OperaControl implements IControl {
     if (!bbox) {
       return {
         ok: false,
-        status: params.place?.trim()
-          ? `Could not resolve a bounded analysis area for "${params.place.trim()}".`
+        status: place
+          ? `Could not resolve a bounded analysis area for "${place}".`
           : "Navigate to the event location or provide a valid bbox before mapping the disaster.",
         hazard,
         warnings,
@@ -2632,7 +2676,7 @@ export class OperaControl implements IControl {
     };
     const eventName =
       params.eventName?.trim() ||
-      [params.place?.trim(), hazard].filter(Boolean).join(" ") ||
+      [place, hazard].filter(Boolean).join(" ") ||
       `${hazard} event`;
     this._options.fitBounds?.(bbox);
     const sources = defaultAuthoritativeSources(hazard);
@@ -2642,12 +2686,12 @@ export class OperaControl implements IControl {
     });
     if (!news.ok) warnings.push(news.status);
 
-    const addSentinelPair = async (): Promise<{
+    const addSentinelPair = async (imageryBBox: BBox = bbox): Promise<{
       preEvent: OperaAgentSentinel2Result;
       postEvent: OperaAgentSentinel2Result;
     }> => {
       const pre = await this.sentinel2ImageryForAgent({
-        bbox,
+        bbox: imageryBBox,
         start: preEvent.start,
         end: preEvent.end,
         period: "pre-event",
@@ -2655,7 +2699,7 @@ export class OperaControl implements IControl {
       });
       if (!pre.ok) warnings.push(pre.status);
       const post = await this.sentinel2ImageryForAgent({
-        bbox,
+        bbox: imageryBBox,
         start: postEvent.start,
         end: postEvent.end,
         period: "post-event",
@@ -2669,7 +2713,7 @@ export class OperaControl implements IControl {
       this._setStatus("Discovering authoritative disaster sources…");
       const authoritative = await this._mapDefaultNasaDisasterSources({
         hazard,
-        place: params.place?.trim() || eventName,
+        place: place || eventName,
         start: event.start,
         end: event.end,
         bbox,
@@ -2678,13 +2722,14 @@ export class OperaControl implements IControl {
       let context: OperaAgentDisasterContextResult | undefined;
       let overture: OperaAgentOvertureResult | undefined;
       let population: OperaAgentPopulationResult | undefined;
+      let imageryBBox = bbox;
       if (authoritative.hazardExtent?.features.length) {
         const lock = this.lockBenchmarkFromGeoJson(
           authoritative.hazardExtent,
           {
             name: eventName,
             date: `${event.start} – ${event.end}`,
-            location: params.place,
+            location: place || undefined,
           },
           {
             label: `${authoritative.event?.title ?? "NASA"} observed ${hazard} extent`,
@@ -2696,6 +2741,7 @@ export class OperaControl implements IControl {
           const focusBBox = lock.benchmark?.bbox
             ? expandAndClipBBox(lock.benchmark.bbox, bbox)
             : bbox;
+          imageryBBox = focusBBox;
           this._options.fitBounds?.(focusBBox);
           overture = await this.overtureInFloodForAgent({
             bbox: focusBBox,
@@ -2716,14 +2762,107 @@ export class OperaControl implements IControl {
           bbox,
         });
       }
-      const sentinel2 = await addSentinelPair();
+      const sentinel2 = await addSentinelPair(imageryBBox);
       const exposureReady = Boolean(overture?.ok || population?.ok);
       const mappedAuthoritative = authoritative.layerIds.length > 0;
       const hasObservedExtent = Boolean(
         authoritative.hazardExtent?.features.length,
       );
+      let onePager: OperaAgentDisasterEventResult["onePager"];
+      if (mappedAuthoritative || context?.ok) {
+        this._setStatus(`Preparing the ${hazard} event one-pager…`);
+        const locked = this._state.benchmark;
+        const mapImageDataUrl =
+          (await this.captureHazardMapSnapshotForAgent(
+            locked?.bbox ?? imageryBBox,
+          )) ?? undefined;
+        const sourceLinks = [
+          ...(authoritative.event
+            ? [
+                {
+                  title: `${authoritative.event.title} — NASA Earthdata GIS catalog`,
+                  url: authoritative.event.portalUrl,
+                  publisher: "NASA Earthdata GIS",
+                },
+              ]
+            : []),
+          ...(news.ok
+            ? news.results.map((result) => ({
+                title: result.title,
+                url: result.sourceUrl,
+                publisher: result.publisher,
+                date: result.date,
+              }))
+            : []),
+        ];
+        const html = buildOnePagerHtml({
+          title: `${eventName}: NASA ${hazard} assessment`,
+          event: {
+            name: eventName,
+            location: place || undefined,
+            date: `${event.start} – ${event.end}`,
+          },
+          hazardLabel: hazard,
+          narrative:
+            `${eventName} was assessed for ${event.start} through ${event.end}. ` +
+            (authoritative.event
+              ? `NASA Earthdata GIS event products from “${authoritative.event.title}” supplied ${authoritative.layerIds.length} mapped authoritative layer(s), prioritized as FEDS fire perimeters, burn-severity indicators, and OPERA disturbance observations where available. `
+              : "No matching NASA Earthdata GIS event catalog was available, so mapped layers are contextual. ") +
+            "Sentinel-2 imagery provides pre/post optical context. Exposure figures are included only when they were calculated against a usable observed hazard polygon; they are not field-validated damage estimates.",
+          mapImageDataUrl,
+          benchmark: locked
+            ? {
+                bbox: locked.bbox,
+                areaKm2: locked.areaKm2,
+                render: locked.render,
+              }
+            : {
+                bbox,
+                areaKm2: 0,
+                render: {
+                  label: `NASA ${hazard} observations`,
+                  fillColor: "#dc2626",
+                },
+              },
+          buildings: overture?.ok
+            ? {
+                floodedCount: overture.buildings.floodedCount,
+                total: overture.buildings.total,
+                fraction: overture.buildings.fraction,
+                floodedAreaKm2: overture.buildings.floodedAreaKm2,
+                source: overture.buildings.source,
+              }
+            : undefined,
+          population: population?.ok
+            ? {
+                totalPopulation: population.totalPopulation,
+                year: population.year,
+                source: population.source,
+              }
+            : undefined,
+          transportation: overture?.ok
+            ? {
+                impactedSegmentCount:
+                  overture.transportation.impactedSegmentCount,
+                impactedLengthKm: overture.transportation.impactedLengthKm,
+                source: overture.transportation.source,
+              }
+            : undefined,
+          sources: sourceLinks,
+          generatedAt: new Date().toISOString().slice(0, 10),
+          credit: "NASA Earthdata GIS · NASA OPERA · GeoLibre",
+        });
+        const filename = `opera-one-pager-${slug(eventName) || hazard}.html`;
+        this._downloadTextFile(filename, html, "text/html");
+        onePager = {
+          ok: true,
+          status: "Event one-pager ready and downloaded.",
+          filename,
+          bytes: html.length,
+        };
+      }
       const status = exposureReady
-        ? `Mapped ${eventName} from the curated NASA event catalog and calculated exposure against the latest observed ${hazard} extent.`
+        ? `Mapped ${eventName} from the curated NASA event catalog, calculated exposure against the latest observed ${hazard} extent, and downloaded an event one-pager.`
         : hasObservedExtent
           ? `Mapped the latest observed ${hazard} extent for ${eventName}, but exposure calculations were unavailable. See workflow warnings for details.`
           : mappedAuthoritative
@@ -2745,6 +2884,7 @@ export class OperaControl implements IControl {
         nasaEvent: authoritative.event,
         authoritativeLayerIds: authoritative.layerIds,
         news,
+        onePager,
         warnings,
       };
     }
@@ -2988,17 +3128,20 @@ export class OperaControl implements IControl {
     }
   }
 
-  /** Search reputable news for quantified, citable impact figures. */
+  /** Search live, citable news for disasters or quantified impacts. */
   async newsImpactSearchForAgent(
     params: OperaAgentNewsParams,
   ): Promise<OperaAgentNewsResult> {
     const query = params.query?.trim();
     if (!query)
       return { ok: false, status: "Provide a search query.", results: [] };
-    this._setStatus("Searching news for impact figures…");
+    this._setStatus("Searching live disaster news…");
     try {
       const { results, answer } = await searchNews(query, {
         maxResults: params.maxResults,
+        topic: params.topic,
+        days: params.days,
+        engine: params.engine,
       });
       const status = `Found ${results.length} news result(s).`;
       this._setStatus(status);
@@ -3044,6 +3187,71 @@ export class OperaControl implements IControl {
         finish(null);
       }
     });
+  }
+
+  /** Capture a clean, north-up report map focused on the observed hazard. */
+  private async captureHazardMapSnapshotForAgent(
+    bbox: BBox,
+  ): Promise<string | null> {
+    const map = this._map;
+    if (!map) return null;
+    if (
+      typeof map.getCenter !== "function" ||
+      typeof map.fitBounds !== "function" ||
+      typeof map.jumpTo !== "function"
+    ) {
+      return this.captureMapSnapshotForAgent();
+    }
+    const camera = {
+      center: map.getCenter(),
+      zoom: map.getZoom(),
+      bearing: map.getBearing(),
+      pitch: map.getPitch(),
+    };
+    const hidden = (map.getStyle().layers ?? [])
+      .filter(
+        (layer) =>
+          layer.type === "raster" &&
+          (layer.id.includes("sentinel-2") ||
+            layer.id.includes("worldpop")),
+      )
+      .map((layer) => ({
+        id: layer.id,
+        visibility: map.getLayoutProperty(layer.id, "visibility"),
+      }));
+    try {
+      for (const layer of hidden) {
+        map.setLayoutProperty(layer.id, "visibility", "none");
+      }
+      map.fitBounds(bbox, {
+        padding: { top: 56, right: 56, bottom: 56, left: 56 },
+        bearing: 0,
+        pitch: 0,
+        duration: 0,
+      });
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        map.once("idle", finish);
+        setTimeout(finish, 1200);
+      });
+      return await this.captureMapSnapshotForAgent();
+    } finally {
+      for (const layer of hidden) {
+        if (map.getLayer(layer.id)) {
+          map.setLayoutProperty(
+            layer.id,
+            "visibility",
+            layer.visibility ?? "visible",
+          );
+        }
+      }
+      map.jumpTo(camera);
+    }
   }
 
   /**
@@ -4167,26 +4375,32 @@ export class OperaControl implements IControl {
     this._status = status;
     content.appendChild(status);
 
+    const resultsSection = document.createElement("div");
+    resultsSection.className = "opera-results-section";
+    resultsSection.hidden = this._granules.length === 0;
+    this._resultsSection = resultsSection;
+
     const divider = document.createElement("div");
     divider.className = "plugin-control-divider";
-    content.appendChild(divider);
+    resultsSection.appendChild(divider);
 
-    content.appendChild(this._buildResultsTable());
-    content.appendChild(this._buildBandGroup());
-    content.appendChild(this._buildRenderGroup());
-    content.appendChild(this._buildDisplayButton());
-    content.appendChild(this._buildInspectButton());
-    content.appendChild(this._buildStatisticsButton());
-    content.appendChild(this._buildStatsPanel());
-    content.appendChild(this._buildDownloadGroup());
-    content.appendChild(this._buildReportButton());
+    resultsSection.appendChild(this._buildResultsTable());
+    resultsSection.appendChild(this._buildBandGroup());
+    resultsSection.appendChild(this._buildRenderGroup());
+    resultsSection.appendChild(this._buildDisplayButton());
+    resultsSection.appendChild(this._buildInspectButton());
+    resultsSection.appendChild(this._buildStatisticsButton());
+    resultsSection.appendChild(this._buildStatsPanel());
+    resultsSection.appendChild(this._buildDownloadGroup());
+    resultsSection.appendChild(this._buildReportButton());
 
     // Spacing between the Display action and the endpoint settings below.
     const endpointDivider = document.createElement("div");
     endpointDivider.className = "plugin-control-divider";
-    content.appendChild(endpointDivider);
+    resultsSection.appendChild(endpointDivider);
 
-    content.appendChild(this._buildEndpointGroup());
+    resultsSection.appendChild(this._buildEndpointGroup());
+    content.appendChild(resultsSection);
 
     this._content = content;
     return content;
@@ -4425,6 +4639,9 @@ export class OperaControl implements IControl {
 
   /** (Re)build the table body from the current view + sort, keeping selection. */
   private _renderRows(): void {
+    if (this._resultsSection) {
+      this._resultsSection.hidden = this._granules.length === 0;
+    }
     if (!this._tableBody) return;
     this._sortView();
     this._tableBody.innerHTML = "";
