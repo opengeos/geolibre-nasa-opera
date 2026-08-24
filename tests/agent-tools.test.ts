@@ -68,6 +68,13 @@ describe("OPERA agent tools", () => {
       "downloads a sourced event one-pager",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "standardized interactive OPERA GeoAgent HTML report",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("opens directly with file://");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("CARTO Voyager raster tiles");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("exact red disclaimer");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("one landscape page");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "If the user explicitly names sources, use the relevant individual tools",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(

@@ -489,6 +489,11 @@ describe("one-pager", () => {
     expect(html).toContain('id="assessment-map"');
     expect(html).toContain('contenteditable="true"');
     expect(html).toContain('id="overview-map"');
+    expect(html).toContain(
+      "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+    );
+    expect(html).toContain(".replace(/\\+/g,'-').replace(/\\//g,'_')");
+    expect(html).not.toContain("https://tile.openstreetmap.org/");
     expect(html).toContain("https://web.geolibre.app/?maponly&amp;embed=1&amp;welcome=0");
     expect(html).toContain("maplibre-gl@6.3.0");
     expect(html).not.toContain("maplibre-gl@5.14.0");

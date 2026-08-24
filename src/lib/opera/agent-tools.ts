@@ -29,6 +29,14 @@ Mandatory disaster-request routing:
 - Only when either the location or event date/window is genuinely missing, call map_disaster_context, explain that those layers are contextual, then ask for the missing value. Never treat multiple incidents within an otherwise specified region and date window as ambiguity; map the regional event. Never claim that a disaster was mapped after only add_basemap or zoom_to_bounds.
 - For a flood with an event window, map_disaster_event runs the complete workflow. Do not replace it with a hand-assembled subset of derive_flood_benchmark, overture_in_flood, population_in_flood, or sentinel2_event_imagery.
 
+Mandatory one-pager output requirements:
+- map_disaster_event and build_one_pager MUST produce the standardized interactive OPERA GeoAgent HTML report, not a static map image, whenever the host provides a GeoLibre project snapshot. The main map must embed GeoLibre in map-only mode so users can pan, zoom, toggle layers, change opacity, use fullscreen, and inspect the actual mapped products.
+- The downloaded report must be a single HTML file that opens directly with file://. Internet access is expected for the hosted GeoLibre viewer, CARTO overview tiles, logos, and remote map/data resources; do not tell users to run a local web server.
+- Preserve the current project layers in the embedded map, use Mercator with pitch and bearing reset to zero, and leave Sentinel-2 imagery off by default. OPERA DIST-HLS/S1 or DSWx-HLS/S1 observations remain the central evidence, with contextual and impact layers supporting interpretation.
+- Always include the editable Background panel, expandable main map, legend, interactive AOI overview, Impacts and Sources panels, JPL and OPERA logos, and the exact red disclaimer: "This map was generated using OPERA GeoAgent and is intended for informational purposes. Results and interpretations require expert validation before use for decision-making."
+- The AOI overview must use CARTO Voyager raster tiles, show a centered AOI rectangle with wider geographic context, allow pan/zoom without visible zoom buttons, and never request tile.openstreetmap.org directly.
+- Print / Save PDF must retain Background, main map, and Impacts in that left-to-right order on one landscape page. Print output hides the expanded map attribution control; native GeoLibre controls are not duplicated by report-level overlays.
+
 Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surface water, SAR backscatter, or disturbance data.
 - Prefer search_and_display_opera when the user asks to find/show/display OPERA data in one request.
 - Use detect_opera_change_between_dates when the user asks to compare two dates, detect change, or create before/after OPERA layers.
@@ -806,7 +814,7 @@ export function createOperaAgentTools(
     tool({
       name: "map_disaster_event",
       description:
-        "Run the deterministic authoritative disaster workflow from only hazard, place/AOI, and dates. It selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. For floods this automatically adds grouped pre/post OPERA DSWx-HLS, cloud-penetrating DSWx-S1, and Sentinel-2 imagery; derives their combined observed flood water; maps Overture buildings as 3D extrusions above raster layers with affected buildings highlighted red; maps affected roads; and calculates WorldPop exposure. Wildfires discover the matching NASA Earthdata GIS event and prefer FEDS perimeters, burn-severity products, and OPERA DIST. Every successful disaster workflow downloads a sourced one-page HTML event assessment. Use this whenever the user does not specify datasets or workflow steps.",
+        "Run the deterministic authoritative disaster workflow from only hazard, place/AOI, and dates. It selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. For floods this automatically adds grouped pre/post OPERA DSWx-HLS, cloud-penetrating DSWx-S1, and Sentinel-2 imagery; derives their combined observed flood water; maps Overture buildings as 3D extrusions above raster layers with affected buildings highlighted red; maps affected roads; and calculates WorldPop exposure. Wildfires discover the matching NASA Earthdata GIS event and prefer FEDS perimeters, burn-severity products, and OPERA DIST. Every successful workflow downloads a locally openable, single-file interactive HTML assessment with an embedded GeoLibre map-only project and CARTO Voyager AOI overview. Use this whenever the user does not specify datasets or workflow steps.",
       inputSchema: disasterEventSchema,
       callback: async (input) =>
         toJsonValue(
@@ -968,7 +976,7 @@ export function createOperaAgentTools(
     tool({
       name: "build_one_pager",
       description:
-        "Assemble a self-contained HTML one-pager for the locked benchmark: map snapshot + legend/scale bar + building exposure + cited impacts + narrative, then download it. Requires a locked benchmark.",
+        "Assemble and download the standardized single-file interactive OPERA GeoAgent HTML report for the locked benchmark: embedded GeoLibre map-only project, legend, CARTO Voyager AOI overview, exposure, cited impacts, editable narrative, branded header, red validation disclaimer, and one-page landscape print layout. The file opens directly with file:// and uses internet-hosted viewer/map resources. Requires a locked benchmark.",
       inputSchema: onePagerSchema,
       callback: async (input) => {
         const result = await controlOrThrow().buildOnePagerForAgent({

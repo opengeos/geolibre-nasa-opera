@@ -3278,9 +3278,9 @@ export class OperaControl implements IControl {
   }
 
   /**
-   * Assemble the self-contained one-pager HTML from the locked benchmark plus
-   * agent-supplied narrative, buildings exposure, and cited impacts; captures a
-   * map snapshot when one is not supplied and downloads the result.
+   * Assemble the locally openable interactive one-pager HTML from the locked
+   * benchmark plus agent-supplied narrative, exposure, cited impacts, and the
+   * current GeoLibre project snapshot, then download the result.
    */
   async buildOnePagerForAgent(
     params: OperaAgentOnePagerParams = {},
