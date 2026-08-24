@@ -921,6 +921,7 @@ export class OperaControl implements IControl {
     this._inspectBtn = undefined;
     this._statsBtn = undefined;
     this._statsPanel = undefined;
+    this._resultsSection = undefined;
     this._benchmarkStatus = undefined;
   }
 
@@ -3202,23 +3203,31 @@ export class OperaControl implements IControl {
     ) {
       return this.captureMapSnapshotForAgent();
     }
-    const camera = {
-      center: map.getCenter(),
-      zoom: map.getZoom(),
-      bearing: map.getBearing(),
-      pitch: map.getPitch(),
-    };
-    const hidden = (map.getStyle().layers ?? [])
-      .filter(
-        (layer) =>
-          layer.type === "raster" &&
-          (layer.id.includes("sentinel-2") ||
-            layer.id.includes("worldpop")),
-      )
-      .map((layer) => ({
-        id: layer.id,
-        visibility: map.getLayoutProperty(layer.id, "visibility"),
-      }));
+    // getStyle/getZoom/getLayoutProperty all throw before the style loads; a
+    // failed report snapshot must never reject the whole disaster workflow.
+    let camera: Parameters<typeof map.jumpTo>[0];
+    let hidden: Array<{ id: string; visibility: unknown }>;
+    try {
+      camera = {
+        center: map.getCenter(),
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      };
+      hidden = (map.getStyle().layers ?? [])
+        .filter(
+          (layer) =>
+            layer.type === "raster" &&
+            (layer.id.includes("sentinel-2") ||
+              layer.id.includes("worldpop")),
+        )
+        .map((layer) => ({
+          id: layer.id,
+          visibility: map.getLayoutProperty(layer.id, "visibility"),
+        }));
+    } catch {
+      return this.captureMapSnapshotForAgent();
+    }
     try {
       for (const layer of hidden) {
         map.setLayoutProperty(layer.id, "visibility", "none");
@@ -4393,14 +4402,16 @@ export class OperaControl implements IControl {
     resultsSection.appendChild(this._buildStatsPanel());
     resultsSection.appendChild(this._buildDownloadGroup());
     resultsSection.appendChild(this._buildReportButton());
+    content.appendChild(resultsSection);
 
-    // Spacing between the Display action and the endpoint settings below.
+    // Endpoint settings stay outside the results section: a failed search hides
+    // that section, and a wrong titiler-cmr endpoint is exactly what a user
+    // then needs to correct.
     const endpointDivider = document.createElement("div");
     endpointDivider.className = "plugin-control-divider";
-    resultsSection.appendChild(endpointDivider);
+    content.appendChild(endpointDivider);
 
-    resultsSection.appendChild(this._buildEndpointGroup());
-    content.appendChild(resultsSection);
+    content.appendChild(this._buildEndpointGroup());
 
     this._content = content;
     return content;

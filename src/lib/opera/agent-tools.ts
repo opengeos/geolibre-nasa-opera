@@ -823,7 +823,7 @@ export function createOperaAgentTools(
     tool({
       name: "map_disaster_context",
       description:
-        "Map Overture buildings and transportation plus WorldPop population only when a disaster request is missing its event date/window and therefore cannot run map_disaster_event. These are contextual layers, not measured impacts. Never use this for a map request that already provides both a region and a date or month.",
+        "Map Overture buildings and transportation plus WorldPop population only when a disaster request is missing its location or its event date/window and therefore cannot run map_disaster_event. These are contextual layers, not measured impacts. Never use this for a map request that already provides both a region and a date or month.",
       inputSchema: disasterContextSchema,
       callback: async (input) =>
         toJsonValue(
