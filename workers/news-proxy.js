@@ -2,9 +2,10 @@
  * News search proxy Worker for the constrained flood one-pager.
  *
  * The browser cannot call the Tavily search API directly (the API key must stay
- * server-side, and CORS). This Worker exposes a single `POST /tavily` endpoint
- * that injects the `TAVILY_API_KEY` secret and forwards to Tavily, adding CORS
- * headers so the plugin's `news_impact_search` tool can reach it. Set the
+ * server-side, and CORS). This Worker exposes a Tavily-backed search endpoint at
+ * `POST /search` (and its original `POST /tavily` alias) that injects the
+ * `TAVILY_API_KEY` secret and forwards to Tavily, adding CORS headers so the
+ * plugin's `news_impact_search` tool can reach it. Set the
  * secret with `wrangler secret put TAVILY_API_KEY --config wrangler.news.toml`;
  * it is never shipped in the browser bundle.
  */
@@ -41,16 +42,21 @@ export async function handleRequest(request, env = {}) {
     return jsonResponse(
       {
         ok: true,
-        usage: "POST /tavily { query, max_results } — set VITE_NEWS_PROXY_ENDPOINT to this Worker URL.",
+        usage: "POST /search (alias: /tavily) { query, max_results } — set VITE_NEWS_PROXY_ENDPOINT to this Worker URL.",
         keyConfigured: Boolean(env.TAVILY_API_KEY),
       },
       cors,
     );
   }
 
-  if (url.pathname !== "/tavily" || request.method !== "POST") {
+  // The client posts to /search by default and to /tavily when Tavily is
+  // explicitly requested; both resolve to the same Tavily-backed handler.
+  if (
+    (url.pathname !== "/search" && url.pathname !== "/tavily") ||
+    request.method !== "POST"
+  ) {
     return jsonResponse(
-      { ok: false, error: "Only POST /tavily is supported." },
+      { ok: false, error: "Only POST /search (alias: /tavily) is supported." },
       cors,
       404,
     );

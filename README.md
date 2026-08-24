@@ -258,6 +258,29 @@ bundled and the panel falls back to manual key entry.
 > Use this only for controlled/sponsor demo deployments. For public deployments,
 > leave it unset and put the key behind a server-side proxy.
 
+### Local testing in GeoLibre with CLIProxyAPI
+
+For controlled local testing, the plugin build reads `CLI_PROXY_API_KEY` and
+prefills GeoAgent's OpenAI-compatible provider, API URL, and model. This exposes
+the key in the local browser bundle, so do not publish that build.
+
+If the key is exported by `~/.zshrc`, run the build through interactive zsh so
+the file is loaded even when the calling terminal or automation is
+non-interactive:
+
+```bash
+export OPERA_PLUGIN_DIR="$(pwd)"
+export GEOLIBRE_TEST_DIR="$(cd ../GeoLibre && pwd)"
+zsh -ic 'cd "$OPERA_PLUGIN_DIR" && npm install && npm run install:geolibre -- --web "$GEOLIBRE_TEST_DIR"'
+
+cd "$GEOLIBRE_TEST_DIR"
+npm run dev
+```
+
+Open `http://localhost:5173`. After changing this plugin, rerun the install
+command and restart GeoLibre so Vite rediscovers the rebuilt drop-in bundle.
+`CLI_PROXY_UPSTREAM` can override the default `https://cli-proxy.opengeos.org`.
+
 ## Disaster impact mapping and flood one-pager
 
 For a location and event date or date range, `map_disaster_event` runs the

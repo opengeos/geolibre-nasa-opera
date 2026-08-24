@@ -32,6 +32,8 @@ describe("OPERA agent tools", () => {
       "buildings_in_flood",
       "overture_in_flood",
       "population_in_flood",
+      "search_realtime_disasters",
+      "tavily_search",
       "news_impact_search",
       "build_one_pager",
     ]);
@@ -55,14 +57,15 @@ describe("OPERA agent tools", () => {
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("sentinel2_event_imagery");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("overture_in_flood");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("population_in_flood");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("search_realtime_disasters");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "Navigating the map or adding a basemap is preparation, not completion",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
-      "Flood workflows also download a one-page assessment",
+      "downloads a one-page event assessment",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
-      "non-flood workflows return mapped observations and exposure results without a one-page report",
+      "downloads a sourced event one-pager",
     );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "If the user explicitly names sources, use the relevant individual tools",
@@ -256,6 +259,33 @@ describe("OPERA agent tools", () => {
     expect(control.newsImpactSearchForAgent).toHaveBeenCalledWith({
       query: "Valencia flood deaths",
       maxResults: 5,
+      engine: "gpt",
+    });
+
+    await tools
+      .find((t) => t.name === "search_realtime_disasters")!
+      ._callback({
+        query: "current floods worldwide",
+        days: 7,
+        max_results: 8,
+      });
+    expect(control.newsImpactSearchForAgent).toHaveBeenLastCalledWith({
+      query: "current floods worldwide",
+      maxResults: 8,
+      topic: "news",
+      days: 7,
+      engine: "gpt",
+    });
+
+    await tools
+      .find((t) => t.name === "tavily_search")!
+      ._callback({ query: "current floods", days: 3, max_results: 4 });
+    expect(control.newsImpactSearchForAgent).toHaveBeenLastCalledWith({
+      query: "current floods",
+      maxResults: 4,
+      topic: "news",
+      days: 3,
+      engine: "tavily",
     });
 
     await tools

@@ -68,6 +68,10 @@ export interface OnePagerInput {
   generatedAt?: string;
   /** Footer credit line. */
   credit?: string;
+  /** Hazard wording; defaults to flood for backward compatibility. */
+  hazardLabel?: string;
+  /** Citable event/data sources shown independently of quantified impacts. */
+  sources?: Array<{ title: string; url: string; publisher?: string; date?: string }>;
 }
 
 const NICE_KM = [
@@ -156,13 +160,15 @@ function impactCard(impact: OnePagerImpact): string {
 
 /** Build the full self-contained one-pager HTML document. */
 export function buildOnePagerHtml(input: OnePagerInput): string {
+  const hazard = input.hazardLabel?.trim() || "flood";
+  const extentLabel = `${hazard} extent`;
   const bar = scaleBar(input.benchmark.bbox);
   const [w, s, e, n] = input.benchmark.bbox;
   const buildings = input.buildings;
   const buildingsBlock = buildings
     ? `<div class="exposure">
          <div class="exposure-value">${buildings.floodedCount.toLocaleString()}</div>
-         <div class="exposure-label">buildings within the flood extent</div>
+         <div class="exposure-label">buildings within the observed ${htmlEscape(extentLabel)}</div>
          <div class="exposure-sub">${(buildings.fraction * 100).toFixed(1)}% of ${buildings.total.toLocaleString()} in view${
            buildings.floodedAreaKm2 !== undefined
              ? ` · ${buildings.floodedAreaKm2.toFixed(2)} km² footprint`
@@ -174,7 +180,7 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   const populationBlock = population
     ? `<div class="exposure">
          <div class="exposure-value">${Math.round(population.totalPopulation).toLocaleString()}</div>
-         <div class="exposure-label">modeled residents within the flood extent</div>
+         <div class="exposure-label">modeled residents within the observed ${htmlEscape(extentLabel)}</div>
          <div class="exposure-sub">WorldPop ${population.year}${
            population.source ? ` · ${htmlEscape(population.source)}` : ""
          } · not a displacement count</div>
@@ -184,7 +190,7 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   const transportationBlock = transportation
     ? `<div class="exposure">
          <div class="exposure-value">${transportation.impactedLengthKm.toFixed(1)} km</div>
-         <div class="exposure-label">transportation centerline within the flood extent</div>
+         <div class="exposure-label">transportation centerline within the observed ${htmlEscape(extentLabel)}</div>
          <div class="exposure-sub">${transportation.impactedSegmentCount.toLocaleString()} Overture segment(s)${
            transportation.source
              ? ` · ${htmlEscape(transportation.source)}`
@@ -196,8 +202,20 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   const impactsBlock = impacts.length
     ? `<div class="impacts">${impacts.map(impactCard).join("")}</div>`
     : `<p class="muted">No cited impacts supplied.</p>`;
+  const sources = input.sources ?? [];
+  const sourcesBlock = sources.length
+    ? `<div class="sources"><h3>Sources</h3>${sources
+        .map((source) => {
+          const meta = [source.publisher, source.date]
+            .filter((value): value is string => Boolean(value))
+            .map(htmlEscape)
+            .join(" · ");
+          return `<a href="${htmlEscape(safeHref(source.url))}" target="_blank" rel="noopener">${htmlEscape(source.title)}${meta ? `<small>${meta}</small>` : ""}</a>`;
+        })
+        .join("")}</div>`
+    : "";
   const mapBlock = input.mapImageDataUrl
-    ? `<img class="map-img" src="${input.mapImageDataUrl}" alt="Benchmark flood map"/>`
+    ? `<img class="map-img" src="${input.mapImageDataUrl}" alt="${htmlEscape(hazard)} event map"/>`
     : `<div class="map-img map-missing">Map snapshot unavailable</div>`;
   const narrative = input.narrative
     ? `<p>${htmlEscape(input.narrative)}</p>`
@@ -217,23 +235,24 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0b1220; background: #eef2f7; }
-  .page { max-width: 1120px; margin: 16px auto; background: #fff; border: 1px solid #d5dbe5; border-radius: 8px; overflow: hidden; }
+  .page { max-width: 1280px; margin: 16px auto; background: #fff; border: 1px solid #d5dbe5; border-radius: 10px; overflow: hidden; box-shadow: 0 12px 36px rgba(15,23,42,.08); }
   .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 2px solid #0b1220; }
   .brand { font-weight: 700; font-size: 15px; letter-spacing: .3px; }
   .brand small { display:block; font-weight: 500; color:#475569; font-size: 11px; }
   .toolbar button { font: inherit; font-size: 12px; padding: 6px 12px; border: 1px solid #2563eb; background:#2563eb; color:#fff; border-radius: 6px; cursor: pointer; }
-  h1.title { text-align:center; font-size: 22px; color:#1d4ed8; margin: 14px 20px 6px; }
+  h1.title { text-align:center; font-size: 24px; color:#163f9f; margin: 16px 20px 6px; letter-spacing:-.3px; }
   .subtitle { text-align:center; color:#475569; font-size: 12px; margin: 0 20px 12px; }
-  .grid { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 12px; padding: 0 16px 16px; }
-  .panel { border:1px solid #d5dbe5; border-radius: 6px; padding: 12px; }
+  .grid { display: grid; grid-template-columns: .78fr 1.75fr .92fr; gap: 14px; padding: 0 18px 18px; }
+  .panel { border:1px solid #d5dbe5; border-radius: 8px; padding: 14px; min-width:0; }
   .panel h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing:.5px; color:#334155; }
-  .panel.bg { background:#eef7ee; }
-  .panel.map { background:#f8fafc; position: relative; padding: 8px; }
-  .panel.impact-panel { background:#eef2fb; }
+  .panel.bg { background:#f3f8f2; font-size:13px; line-height:1.45; }
+  .panel.bg p { margin:0; }
+  .panel.map { background:#f8fafc; position: relative; padding: 10px; }
+  .panel.impact-panel { background:#f1f5fb; }
   .map-wrap { position: relative; }
-  .map-img { width: 100%; height: auto; display:block; border-radius: 4px; border:1px solid #cbd5e1; }
+  .map-img { width: 100%; aspect-ratio: 16 / 10; object-fit:cover; display:block; border-radius: 6px; border:1px solid #b8c4d4; background:#111827; }
   .map-missing { display:flex; align-items:center; justify-content:center; height: 240px; color:#64748b; background:#e2e8f0; }
-  .legend { position:absolute; left: 14px; bottom: 40px; background: rgba(255,255,255,0.9); border:1px solid #cbd5e1; border-radius: 4px; padding: 4px 6px; }
+  .legend { position:absolute; left: 14px; bottom: 42px; max-width:55%; background: rgba(255,255,255,0.94); border:1px solid #cbd5e1; border-radius: 5px; padding: 5px 7px; box-shadow:0 2px 8px rgba(15,23,42,.15); }
   .legend .legend-title { font-size: 10px; font-weight:600; color:#334155; margin-bottom: 2px; }
   .scalebar { position:absolute; left:14px; bottom: 14px; background: rgba(255,255,255,0.9); border:1px solid #cbd5e1; border-radius: 4px; padding: 4px 6px; font-size: 10px; color:#0b1220; }
   .scalebar .bar { height: 6px; background:#0b1220; margin-top: 3px; }
@@ -247,9 +266,14 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   .impact-value { display:block; font-size: 18px; font-weight: 700; color:#0b1220; }
   .impact-claim { display:block; font-size: 12px; color:#334155; }
   .impact-meta { display:block; font-size: 10px; color:#2563eb; margin-top: 2px; }
+  .sources { margin-top: 12px; padding-top: 10px; border-top: 1px solid #cbd5e1; }
+  .sources h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color:#475569; }
+  .sources a { display:block; margin: 0 0 6px; color:#1d4ed8; font-size:11px; text-decoration:none; overflow-wrap:anywhere; }
+  .sources small { display:block; color:#64748b; font-size:9px; }
   .muted { color:#64748b; font-size: 12px; }
   .footer { border-top:1px solid #d5dbe5; padding: 8px 20px; font-size: 10px; color:#64748b; display:flex; justify-content:space-between; gap: 12px; flex-wrap: wrap; }
-  @media print { body { background:#fff; } .toolbar { display:none; } .page { border:none; margin:0; max-width:none; } }
+  @media (max-width: 900px) { .grid { grid-template-columns:1fr; } .map { grid-row:1; } }
+  @media print { @page { size: landscape; margin: 8mm; } body { background:#fff; } .toolbar { display:none; } .page { border:none; box-shadow:none; margin:0; max-width:none; } }
 </style>
 </head>
 <body>
@@ -266,7 +290,7 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
         ${narrative}
       </div>
       <div class="panel map">
-        <h2>Flood extent (benchmark)</h2>
+        <h2>Observed ${htmlEscape(hazard)} extent</h2>
         <div class="map-wrap">
           ${mapBlock}
           <div class="legend"><div class="legend-title">${htmlEscape(input.benchmark.render.label ?? "Flood water extent")}</div>${legendSvg(input.benchmark.render)}</div>
@@ -283,10 +307,11 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
         ${populationBlock}
         ${transportationBlock}
         ${impactsBlock}
+        ${sourcesBlock}
       </div>
     </div>
     <div class="footer">
-      <span>AOI ${w.toFixed(3)}, ${s.toFixed(3)}, ${e.toFixed(3)}, ${n.toFixed(3)} · flooded area ${input.benchmark.areaKm2.toFixed(2)} km²</span>
+      <span>AOI ${w.toFixed(3)}, ${s.toFixed(3)}, ${e.toFixed(3)}, ${n.toFixed(3)}${input.benchmark.areaKm2 > 0 ? ` · observed ${htmlEscape(hazard)} area ${input.benchmark.areaKm2.toFixed(2)} km²` : ""}</span>
       <span>${htmlEscape(input.credit ?? "Generated by the NASA OPERA GeoLibre plugin")}${
         input.generatedAt ? ` · ${htmlEscape(input.generatedAt)}` : ""
       }</span>

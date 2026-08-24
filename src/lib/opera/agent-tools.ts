@@ -16,12 +16,17 @@ import {
 export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available for searching and visualizing OPERA satellite products.
 
 Mandatory disaster-request routing:
+- For questions about disasters happening now, today, currently, recently, or in the latest news, call search_realtime_disasters before answering. It uses GPT's native web_search functionality. Cite returned source_url values and publication dates; never answer a real-time disaster question from memory alone.
+- A map/show/analyze request is never routed to search_realtime_disasters. Call map_disaster_event only; that composite tool performs its own bounded, sourced impact search and returns those results for the answer.
+- Do not use tavily_search unless the user explicitly asks for Tavily by name. Normal current-event and impact searches use GPT web search.
 - A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster without named datasets MUST call map_disaster_event. The user only needs to provide a location and event date or date range; infer the standard data workflow and do not ask them to name OPERA, Sentinel-2, Overture, WorldPop, or individual tools. Navigating the map or adding a basemap is preparation, not completion.
 - When the user does not name data sources, map_disaster_event MUST use its deterministic authoritative defaults. These prioritize an observed hazard extent from a mission or government source, then corroborating change observations, Overture buildings and transportation, WorldPop modeled population, and attributable official reports or news. If the user explicitly names sources, use the relevant individual tools where available and clearly identify any named source the available tools cannot honor. Do not imply that map_disaster_event overrides its fixed defaults.
 - Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. map_disaster_event adds open-access pre/post Sentinel-2 imagery automatically; use sentinel2_event_imagery only for an explicit standalone imagery request.
-- For a default-source request, call map_disaster_event once with hazard, place, start, and end. A user-drawn AOI is applied automatically and takes precedence over model-supplied bounds; otherwise omit bbox and let the composite tool resolve the named place. The composite tool adds the correct contextual and impact layers. Flood workflows also download a one-page assessment after all layers finish loading; non-flood workflows return mapped observations and exposure results without a one-page report.
+- For a default-source request, call map_disaster_event once with hazard, place, start, and end. A user-drawn AOI is applied automatically and takes precedence over model-supplied bounds; otherwise omit bbox and let the composite tool resolve the named place. The composite tool adds the correct contextual and impact layers and downloads a one-page event assessment after the layers finish loading.
+- Never call map_disaster_event more than once for the same user request, even when its result contains warnings or lacks one optional source. Report those limitations from the first result instead of retrying the whole composite workflow.
+- A state or region plus a month is a sufficiently bounded event request even when no individual incident is named. Map the matching regional NASA event; do not ask which incident the user means and do not fall back to map_disaster_context. In particular, "Map the Colorado Fire in July 2026" and "Map Colorado Fires July 2026" both mean the statewide NASA Earthdata GIS event "Colorado Fires July 2026": call map_disaster_event exactly once with hazard="wildfire", place="Colorado", start="2026-07-01", and end="2026-07-31".
 - If dates are omitted but the hazard and place clearly identify a well-known historical event, use the event's established date window and state that assumption. Do not stop to request confirmation merely because dates were omitted. For example, "Flood in Valencia Region, Spain" refers to the late-October 2024 DANA flood; use 2024-10-27 through 2024-11-05 unless the user specifies another event.
-- If the event remains genuinely ambiguous, call map_disaster_context first, explain that those layers are contextual, then ask for the missing date or event identifier. Never claim that a disaster was mapped after only add_basemap or zoom_to_bounds.
+- Only when either the location or event date/window is genuinely missing, call map_disaster_context, explain that those layers are contextual, then ask for the missing value. Never treat multiple incidents within an otherwise specified region and date window as ambiguity; map the regional event. Never claim that a disaster was mapped after only add_basemap or zoom_to_bounds.
 - For a flood with an event window, map_disaster_event runs the complete workflow. Do not replace it with a hand-assembled subset of derive_flood_benchmark, overture_in_flood, population_in_flood, or sentinel2_event_imagery.
 
 Use OPERA tools when the user asks for OPERA, DSWx, RTC-S1, CSLC-S1, DIST, surface water, SAR backscatter, or disturbance data.
@@ -46,7 +51,7 @@ Disaster mapping workflow:
 - Only call assets or people "impacted" when a hazard extent is available. Overture and population layers without a hazard intersection are context layers, not measured impacts.
 - map_disaster_event unions OPERA DSWx-HLS and cloud-penetrating DSWx-S1 observed water for floods and adds pre/post Sentinel-2 true-color context from Microsoft Planetary Computer. Treat optical imagery as visual context unless a separate analysis quantifies change.
 - For wildfires, map_disaster_event first discovers the matching curated NASA Disasters event, maps visible FEDS perimeter, burn-severity, and OPERA DIST products, and intersects the latest usable FEDS perimeter with Overture and WorldPop. If no usable observed perimeter is available, it clearly falls back to contextual exposure layers without claiming impact.
-- For other non-flood disasters, map_disaster_event maps the highest-priority curated NASA event products it can resolve, adds contextual Overture and WorldPop layers, and explains when quantified exposure still requires an authoritative hazard polygon.
+- For other non-flood disasters, map_disaster_event maps the highest-priority curated NASA event products it can resolve, adds contextual Overture and WorldPop layers, explains when quantified exposure still requires an authoritative hazard polygon, and downloads a sourced event one-pager.
 
 Flood impact mapping and one-pager workflow:
 - For a normal place/AOI + date request, call map_disaster_event. It searches and groups pre-event OPERA DSWx-HLS and DSWx-S1, derives and groups their combined post-event observed water, adds grouped pre/post Sentinel-2, maps Overture buildings as 3D extrusions above all raster layers, highlights flooded buildings in red and affected roads in orange, calculates WorldPop exposure, and downloads the completed one-pager with an automatic background narrative.
@@ -388,7 +393,13 @@ const disasterEventSchema = z.object({
     .describe(
       "Disaster type inferred from the request, e.g. flood or wildfire.",
     ),
-  place: z.string().optional().describe("Place name supplied by the user."),
+  place: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Geographic place named by the user, e.g. Colorado. Always extract it from the request; the tool geocodes it when bbox is omitted.",
+    ),
   event_name: z.string().optional().describe("Concise human event label."),
   bbox: bboxSchema.describe(
     "Precise user-drawn AOI as [west,south,east,north]. Omit when no AOI was drawn; the tool resolves place automatically.",
@@ -446,6 +457,22 @@ const newsImpactSchema = z.object({
     .describe(
       "News search query, e.g. 'Valencia flood October 2024 deaths damages displaced'.",
     ),
+  max_results: z.number().int().min(1).max(20).optional(),
+});
+
+const realtimeDisasterSchema = z.object({
+  query: z
+    .string()
+    .describe(
+      "Current-disaster search query, including a region or hazard when relevant.",
+    ),
+  days: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe("How many days of recent news to search (default 14)."),
   max_results: z.number().int().min(1).max(20).optional(),
 });
 
@@ -779,7 +806,7 @@ export function createOperaAgentTools(
     tool({
       name: "map_disaster_event",
       description:
-        "Run the deterministic authoritative disaster workflow from only hazard, place/AOI, and dates. It selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. For floods this automatically adds grouped pre/post OPERA DSWx-HLS, cloud-penetrating DSWx-S1, and Sentinel-2 imagery; derives their combined observed flood water; maps Overture buildings as 3D extrusions above raster layers with affected buildings highlighted red; maps affected roads; calculates WorldPop exposure; and downloads a one-page HTML assessment with a background narrative. Wildfires discover the matching NASA Disasters event and prefer FEDS perimeters, burn-severity products, and OPERA DIST without generating a one-page report. Use this whenever the user does not specify datasets or workflow steps.",
+        "Run the deterministic authoritative disaster workflow from only hazard, place/AOI, and dates. It selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. For floods this automatically adds grouped pre/post OPERA DSWx-HLS, cloud-penetrating DSWx-S1, and Sentinel-2 imagery; derives their combined observed flood water; maps Overture buildings as 3D extrusions above raster layers with affected buildings highlighted red; maps affected roads; and calculates WorldPop exposure. Wildfires discover the matching NASA Earthdata GIS event and prefer FEDS perimeters, burn-severity products, and OPERA DIST. Every successful disaster workflow downloads a sourced one-page HTML event assessment. Use this whenever the user does not specify datasets or workflow steps.",
       inputSchema: disasterEventSchema,
       callback: async (input) =>
         toJsonValue(
@@ -796,7 +823,7 @@ export function createOperaAgentTools(
     tool({
       name: "map_disaster_context",
       description:
-        "Map Overture buildings and transportation plus WorldPop population for any disaster AOI. These are contextual layers, not measured impacts, until a hazard extent is available. Use after displaying the relevant OPERA hazard product for non-flood disasters.",
+        "Map Overture buildings and transportation plus WorldPop population only when a disaster request is missing its location or its event date/window and therefore cannot run map_disaster_event. These are contextual layers, not measured impacts. Never use this for a map request that already provides both a region and a date or month.",
       inputSchema: disasterContextSchema,
       callback: async (input) =>
         toJsonValue(
@@ -893,6 +920,38 @@ export function createOperaAgentTools(
         ),
     }),
     tool({
+      name: "search_realtime_disasters",
+      description:
+        "Search the live internet news index for disasters happening now or recently. Use this for current/latest disaster discovery before mapping an event. Returns citable source URLs, publishers, publication dates, and snippets.",
+      inputSchema: realtimeDisasterSchema,
+      callback: async (input) =>
+        toJsonValue(
+          await controlOrThrow().newsImpactSearchForAgent({
+            query: input.query,
+            maxResults: input.max_results,
+            topic: "news",
+            days: input.days ?? 14,
+            engine: "gpt",
+          }),
+        ),
+    }),
+    tool({
+      name: "tavily_search",
+      description:
+        "Search with Tavily. Use ONLY when the user explicitly asks for Tavily by name; never use it for ordinary real-time disaster or impact searches.",
+      inputSchema: realtimeDisasterSchema,
+      callback: async (input) =>
+        toJsonValue(
+          await controlOrThrow().newsImpactSearchForAgent({
+            query: input.query,
+            maxResults: input.max_results,
+            topic: "news",
+            days: input.days ?? 14,
+            engine: "tavily",
+          }),
+        ),
+    }),
+    tool({
       name: "news_impact_search",
       description:
         "Search reputable news for quantified financial/societal/public-safety impact figures. Returns results with source_url, publisher, and date so every figure is citable.",
@@ -902,6 +961,7 @@ export function createOperaAgentTools(
           await controlOrThrow().newsImpactSearchForAgent({
             query: input.query,
             maxResults: input.max_results,
+            engine: "gpt",
           }),
         ),
     }),

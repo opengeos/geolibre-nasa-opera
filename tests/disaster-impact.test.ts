@@ -863,6 +863,32 @@ describe("disaster impact control", () => {
     );
   });
 
+  it("geocodes the place when the model supplies an invalid optional bbox", async () => {
+    const colorado: [number, number, number, number] = [
+      -109.1, 37, -102, 41,
+    ];
+    const geocodePlace = vi.fn(async () => ({
+      bbox: colorado,
+      displayName: "Colorado, United States",
+    }));
+    const control = new OperaControl({ geocodePlace });
+
+    const result = await control.mapDisasterEventForAgent({
+      hazard: "wildfire",
+      place: "Colorado",
+      bbox: "Colorado",
+      start: "invalid-date",
+      end: "2026-07-31",
+    });
+
+    expect(geocodePlace).toHaveBeenCalledWith("Colorado");
+    expect(result.bbox).toEqual(colorado);
+    expect(result.warnings).toContain(
+      "Ignored an invalid model-supplied bbox and resolved the named place instead.",
+    );
+    expect(result.status).not.toContain("Invalid disaster bbox");
+  });
+
   it("uses the default NASA FEDS extent for wildfire exposure", async () => {
     const registerLayer = vi.fn();
     const geocodePlace = vi.fn(async () => ({

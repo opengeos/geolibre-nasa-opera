@@ -569,7 +569,7 @@
 .opera-docked {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: auto;
   min-height: 0;
   color: var(--pc-text);
   font-family:
@@ -578,10 +578,45 @@
   line-height: 1.4;
 }
 
+/* GeoLibre's desktop panel row stretches every right-panel <aside> to the map
+ * height. Let the NASA OPERA sidebar use its natural content height instead;
+ * the host's overflow container still scrolls when that height cannot fit.
+ * `:has()` keeps this override local to this external plugin. */
+aside:has(.opera-docked) {
+  align-self: flex-start;
+  height: fit-content;
+  max-height: 100%;
+}
+
+/* Search results add the table and analysis controls. At that point promote
+ * the compact card to the full available sidebar height before allowing any
+ * scrolling, instead of preserving the short pre-search scroll viewport. */
+aside:has(.opera-results-section:not([hidden])) {
+  align-self: stretch;
+  height: 100%;
+}
+
 .opera-docked .plugin-control-content {
   /* The content is already the flex-filled scroll area; drop the reserved
    * scrollbar gutter since the host panel body supplies its own padding. */
   padding: 10px 12px;
+  flex: 0 1 auto;
+  max-height: none;
+  overflow-y: visible;
+}
+
+.opera-docked:has(.opera-results-section:not([hidden])) {
+  height: 100%;
+}
+
+.opera-docked:has(.opera-results-section:not([hidden]))
+  .plugin-control-content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.opera-results-section[hidden] {
+  display: none;
 }
 
 .opera-select {

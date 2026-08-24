@@ -340,6 +340,65 @@ describe("news", () => {
       sourceUrl: "https://www.reuters.com/world/x",
     });
     expect(out.answer).toBe("Summary");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://news.example.com/search",
+      expect.any(Object),
+    );
+  });
+
+  it("uses Tavily only when explicitly selected", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ results: [] }),
+    );
+    await searchNews("current floods", {
+      endpoint: "https://news.example.com",
+      engine: "tavily",
+      fetchImpl: fetchImpl as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://news.example.com/tavily",
+      expect.any(Object),
+    );
+  });
+
+  it("uses GPT native web search directly in a configured local build", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.model).toBe("gpt-5.6-luna");
+      expect(body.tools).toContainEqual(
+        expect.objectContaining({ type: "web_search_20250305" }),
+      );
+      return Response.json({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              answer: "One current flood",
+              results: [
+                {
+                  title: "Flood report",
+                  url: "https://example.com/flood",
+                  content: "A current flood was reported.",
+                  published_date: "2026-08-24",
+                },
+              ],
+            }),
+          },
+        ],
+      });
+    });
+    const out = await searchNews("current US disasters", {
+      endpoint: "",
+      topic: "news",
+      gptApiKey: "local-test-key",
+      gptBaseUrl: "https://cli.example.com",
+      fetchImpl: fetchImpl as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://cli.example.com/v1/messages",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(out.results[0]?.sourceUrl).toBe("https://example.com/flood");
   });
 });
 
