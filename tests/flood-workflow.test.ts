@@ -455,6 +455,8 @@ describe("one-pager", () => {
     expect(html).toContain("125,000");
     expect(html).toContain("32.4 km");
     expect(html).toContain("window.print()");
+    expect(html).toContain("https://assets.geolibre.app/images/jpl-logo.webp");
+    expect(html).toContain("https://assets.geolibre.app/images/opera-logo.webp");
   });
 
   it("escapes HTML in untrusted narrative/impacts", () => {
@@ -466,5 +468,45 @@ describe("one-pager", () => {
     });
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("exports an editable report with the live project in GeoLibre map-only mode", () => {
+    const html = buildOnePagerHtml({
+      title: "Interactive assessment",
+      event: { name: "Event", location: "AOI" },
+      narrative: "Editable background.",
+      benchmark: { bbox: [-1, 38, 0, 39], areaKm2: 10, render: {} },
+      geoLibreProject: {
+        name: "water-</script>",
+        mapView: { center: [-0.5, 38.5], zoom: 8 },
+        layers: [{ id: "overture-derived", name: "Saved Overture buildings" }],
+        plugins: {
+          activePluginIds: ["maplibre-layer-control", "maplibre-gl-overture-maps"],
+        },
+      },
+    });
+
+    expect(html).toContain('id="assessment-map"');
+    expect(html).toContain('contenteditable="true"');
+    expect(html).toContain('id="overview-map"');
+    expect(html).toContain("https://web.geolibre.app/?maponly&amp;embed=1&amp;welcome=0");
+    expect(html).toContain("maplibre-gl@6.3.0");
+    expect(html).not.toContain("maplibre-gl@5.14.0");
+    expect(html).toContain("window.location.protocol === 'file:'");
+    expect(html).toContain("#geolibreProject=");
+    expect(html).toContain("geolibre:load-project");
+    expect(html).toContain("layer.visible = false");
+    expect(html).toContain("sentinel-2-event-imagery");
+    expect(html).toContain("project.preferences.map.projection = 'mercator'");
+    expect(html).toContain("project.mapView.pitch = 0");
+    expect(html).toContain("project.mapView.bearing = 0");
+    expect(html).not.toContain('id="expand-button"');
+    expect(html).not.toContain('id="layer-panel"');
+    expect(html).not.toContain('"maplibre-gl-overture-maps"');
+    expect(html).toContain("Saved Overture buildings");
+    expect(html).not.toContain('<div class="scalebar">');
+    expect(html).toContain("expert validation before use for decision-making");
+    expect(html).not.toContain("water-</script>");
+    expect(html).toContain("water-\\u003c/script\\u003e");
   });
 });
