@@ -2810,7 +2810,7 @@ export class OperaControl implements IControl {
             : []),
         ];
         const html = buildOnePagerHtml({
-          title: `${eventName}: NASA ${hazard} assessment`,
+          title: eventName,
           event: {
             name: eventName,
             location: place || undefined,

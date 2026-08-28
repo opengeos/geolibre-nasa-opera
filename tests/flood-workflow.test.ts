@@ -500,6 +500,16 @@ describe("one-pager", () => {
     expect(html).toContain("project.preferences.map.projection = 'mercator'");
     expect(html).toContain("project.mapView.pitch = 0");
     expect(html).toContain("project.mapView.bearing = 0");
+    expect(html).toContain('name":"Google Hybrid"');
+    expect(html).toContain('"basemapVisible":false');
+    expect(html).toContain(
+      "https://mt1.google.com/vt/lyrs=y\\u0026x={x}\\u0026y={y}\\u0026z={z}",
+    );
+    expect(html).toContain('"panelVisible":true');
+    expect(html).toContain('"panelPosition":"bottom-left"');
+    expect(html).toContain('"one-pager-google-hybrid":{"hidden":true}');
+    expect(html).toContain("resize:both");
+    expect(html).not.toContain('<div class="legend">');
     expect(html).not.toContain('id="expand-button"');
     expect(html).not.toContain('id="layer-panel"');
     expect(html).not.toContain('"maplibre-gl-overture-maps"');

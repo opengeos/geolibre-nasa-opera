@@ -2,7 +2,7 @@
  * Self-contained one-pager (HTML) generator for the constrained flood workflow.
  *
  * Produces a single downloadable `.html` file (inline CSS, data-URL map image,
- * inline-SVG legend + scale bar) that mirrors the reference NASA/JPL OPERA
+ * inline-SVG fallback legend + scale bar) that mirrors the reference NASA/JPL OPERA
  * poster: header, title, a background/narrative column, the QAed benchmark map
  * with legend + scale bar, and an impacts column where every quantified figure
  * links to its cited source. It is print/PDF-ready (a Print button calls
@@ -192,6 +192,8 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   // obscures the map and is unnecessary once the queried layers are persisted.
   const reportProject = input.geoLibreProject
     ? (JSON.parse(JSON.stringify(input.geoLibreProject)) as Record<string, unknown> & {
+        layers?: Array<Record<string, unknown>>;
+        legend?: Record<string, unknown>;
         plugins?: { activePluginIds?: unknown[] };
       })
     : undefined;
@@ -199,6 +201,50 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
     reportProject.plugins.activePluginIds = reportProject.plugins.activePluginIds.filter(
       (id) => id !== "maplibre-gl-overture-maps",
     );
+  }
+  if (reportProject) {
+    const googleHybridId = "one-pager-google-hybrid";
+    reportProject.basemapVisible = false;
+    const layers = Array.isArray(reportProject.layers)
+      ? reportProject.layers
+      : [];
+    if (!layers.some((layer) => layer.id === googleHybridId)) {
+      layers.unshift({
+        id: googleHybridId,
+        name: "Google Hybrid",
+        type: "xyz",
+        source: {
+          type: "raster",
+          tiles: ["https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"],
+          url: "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+          tileSize: 256,
+          attribution: "Google",
+        },
+        visible: true,
+        opacity: 1,
+        metadata: { sourceKind: "xyz-url" },
+      });
+    }
+    reportProject.layers = layers;
+    const legend =
+      reportProject.legend && typeof reportProject.legend === "object"
+        ? reportProject.legend
+        : {};
+    const overrides =
+      legend.overrides && typeof legend.overrides === "object"
+        ? (legend.overrides as Record<string, unknown>)
+        : {};
+    reportProject.legend = {
+      ...legend,
+      title: typeof legend.title === "string" ? legend.title : "Legend",
+      groupByLayer:
+        typeof legend.groupByLayer === "boolean" ? legend.groupByLayer : true,
+      order: Array.isArray(legend.order) ? legend.order : [],
+      overrides: { ...overrides, [googleHybridId]: { hidden: true } },
+      panelVisible: true,
+      panelCollapsed: false,
+      panelPosition: "bottom-left",
+    };
   }
   const buildings = input.buildings;
   const buildingsBlock = buildings
@@ -274,7 +320,8 @@ ${input.geoLibreProject ? `<link rel="stylesheet" href="https://unpkg.com/maplib
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
   body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:#0b1220; background:#eef2f7; }
-  .page { max-width:1280px; margin:16px auto; background:#fff; border:1px solid #d5dbe5; border-radius:10px; overflow:hidden; box-shadow:0 12px 36px rgba(15,23,42,.08); }
+  .page { width:calc(100% - 32px); max-width:1280px; min-width:320px; min-height:480px; margin:16px auto; background:#fff; border:1px solid #d5dbe5; border-radius:10px; overflow:auto; resize:both; box-shadow:0 12px 36px rgba(15,23,42,.08); }
+  .page::-webkit-resizer { background:linear-gradient(135deg, transparent 48%, #2563eb 50%); }
   .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 2px solid #0b1220; }
   .brand { display:flex; align-items:center; gap:14px; min-width:0; }
   .brand-logos { display:flex; align-items:center; gap:12px; }
@@ -325,8 +372,8 @@ ${input.geoLibreProject ? `<link rel="stylesheet" href="https://unpkg.com/maplib
   .muted { color:#64748b; font-size: 12px; }
   .footer { border-top:1px solid #d5dbe5; padding: 8px 20px; font-size: 10px; color:#64748b; display:flex; justify-content:space-between; gap: 12px; flex-wrap: wrap; }
   .disclaimer { flex-basis:100%; padding-top:6px; border-top:1px solid #e2e8f0; color:#475569; font-weight:600; }
-  @media (max-width: 900px) { .grid { grid-template-columns:1fr; } .map { grid-row:1; } .brand-copy { display:none; } }
-  @media print { @page { size: landscape; margin: 8mm; } body { background:#fff; } .toolbar { display:none; } .page { border:none; box-shadow:none; margin:0; max-width:none; } .grid { grid-template-columns:.78fr 1.75fr .92fr; padding-bottom:8px; } .panel { padding:10px; } .panel.bg { grid-column:1; grid-row:1; font-size:11px; line-height:1.3; } .panel.map { grid-column:2; grid-row:1; } .panel.impact-panel { grid-column:3; grid-row:1; } #assessment-map { min-height:310px; } #overview-map { position:relative; height:90px; margin-top:6px; } #overview-map > svg { visibility:hidden; } #overview-map::after { content:""; position:absolute; z-index:10; left:25%; top:25%; width:50%; height:50%; border:2px solid #1d4ed8; background:rgba(37,99,235,.2); -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+  @media (max-width: 900px) { .page { min-width:calc(100% - 16px); margin:8px auto; } .grid { grid-template-columns:1fr; } .map { grid-row:1; } .brand-copy { display:none; } }
+  @media print { @page { size: landscape; margin: 8mm; } body { background:#fff; } .toolbar { display:none; } .page { width:auto; min-width:0; min-height:0; resize:none; overflow:visible; border:none; box-shadow:none; margin:0; max-width:none; } .grid { grid-template-columns:.78fr 1.75fr .92fr; padding-bottom:8px; } .panel { padding:10px; } .panel.bg { grid-column:1; grid-row:1; font-size:11px; line-height:1.3; } .panel.map { grid-column:2; grid-row:1; } .panel.impact-panel { grid-column:3; grid-row:1; } #assessment-map { min-height:310px; } #overview-map { position:relative; height:90px; margin-top:6px; } #overview-map > svg { visibility:hidden; } #overview-map::after { content:""; position:absolute; z-index:10; left:25%; top:25%; width:50%; height:50%; border:2px solid #1d4ed8; background:rgba(37,99,235,.2); -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 </style>
 </head>
 <body>
@@ -353,7 +400,11 @@ ${input.geoLibreProject ? `<link rel="stylesheet" href="https://unpkg.com/maplib
         <h2>Observed ${htmlEscape(hazard)} extent</h2>
         <div class="map-wrap">
           ${mapBlock}
-          <div class="legend"><div class="legend-title">${htmlEscape(input.benchmark.render.label ?? "Flood water extent")}</div>${legendSvg(input.benchmark.render)}</div>
+          ${
+            !input.geoLibreProject
+              ? `<div class="legend"><div class="legend-title">${htmlEscape(input.benchmark.render.label ?? "Flood water extent")}</div>${legendSvg(input.benchmark.render)}</div>`
+              : ""
+          }
           ${
             !input.geoLibreProject && bar.km > 0
               ? `<div class="scalebar">${formatKm(bar.km)}<div class="bar" style="width:${bar.pct.toFixed(1)}%"></div></div>`
@@ -413,7 +464,7 @@ import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.3.0/dist/maplibre-g
   if (directFile) {
     const bytes = fflate.gzipSync(fflate.strToU8(JSON.stringify(project)), {level:9});
     let binary = ''; for (let i=0; i<bytes.length; i+=32768) binary += String.fromCharCode(...bytes.subarray(i,i+32768));
-    const encoded = btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
+    const encoded = btoa(binary).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=+$/g,'');
     frame.src = viewerSrc.split('#')[0] + '#geolibreProject=' + encoded;
   } else frame.src = viewerSrc;
   const view = project.mapView || project.view || {};
@@ -429,6 +480,7 @@ import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.3.0/dist/maplibre-g
   const drawAoi = () => { const corners = [[${w},${s}],[${e},${s}],[${e},${n}],[${w},${n}]].map(c => overview.project(c)); polygon.setAttribute('points',corners.map(p => p.x+','+p.y).join(' ')); };
   overview.on('load', () => { overview.fitBounds([[${overviewBounds[0]},${overviewBounds[1]}],[${overviewBounds[2]},${overviewBounds[3]}]],{padding:8,duration:0}); drawAoi(); });
   overview.on('move',drawAoi); overview.on('resize',drawAoi);
+  new ResizeObserver(() => overview.resize()).observe(document.querySelector('.page'));
   window.addEventListener('beforeprint', () => { overview.resize(); overview.fitBounds([[${overviewBounds[0]},${overviewBounds[1]}],[${overviewBounds[2]},${overviewBounds[3]}]],{padding:8,duration:0}); drawAoi(); });
   window.addEventListener('afterprint', () => { overview.resize(); overview.fitBounds([[${overviewBounds[0]},${overviewBounds[1]}],[${overviewBounds[2]},${overviewBounds[3]}]],{padding:8,duration:0}); drawAoi(); });
 })();
