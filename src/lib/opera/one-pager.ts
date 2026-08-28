@@ -1,16 +1,12 @@
 /**
  * Self-contained one-pager (HTML) generator for the constrained flood workflow.
  *
- * Produces a single downloadable `.html` file (inline CSS, data-URL map image,
- * inline-SVG legend + scale bar) that mirrors the reference NASA/JPL OPERA
- * poster: header, title, a background/narrative column, the QAed benchmark map
- * with legend + scale bar, and an impacts column where every quantified figure
- * links to its cited source. It is print/PDF-ready (a Print button calls
- * `window.print()`), and the embedded map is already a PNG so the page also
- * screenshots cleanly for social sharing.
+ * Produces a single downloadable `.html` file with inline report content and a
+ * direct-file-safe embedded GeoLibre project. Internet-hosted viewer, CARTO
+ * tiles, and logo resources keep the map interactive when opened locally.
  *
  * Every displayed number is expected to be attributable: building exposure comes
- * from the benchmark ∩ OSM intersection, and each impact carries a source URL.
+ * from the benchmark intersection, and each impact carries a source URL.
  */
 
 import type { BenchmarkEvent, BenchmarkRender } from "./benchmark";
@@ -324,7 +320,7 @@ ${input.geoLibreProject ? `<link rel="stylesheet" href="https://unpkg.com/maplib
   .sources small { display:block; color:#64748b; font-size:9px; }
   .muted { color:#64748b; font-size: 12px; }
   .footer { border-top:1px solid #d5dbe5; padding: 8px 20px; font-size: 10px; color:#64748b; display:flex; justify-content:space-between; gap: 12px; flex-wrap: wrap; }
-  .disclaimer { flex-basis:100%; padding-top:6px; border-top:1px solid #e2e8f0; color:#475569; font-weight:600; }
+  .disclaimer { flex-basis:100%; padding-top:6px; border-top:1px solid #e2e8f0; color:#b91c1c; font-weight:600; }
   @media (max-width: 900px) { .grid { grid-template-columns:1fr; } .map { grid-row:1; } .brand-copy { display:none; } }
   @media print { @page { size: landscape; margin: 8mm; } body { background:#fff; } .toolbar { display:none; } .page { border:none; box-shadow:none; margin:0; max-width:none; } .grid { grid-template-columns:.78fr 1.75fr .92fr; padding-bottom:8px; } .panel { padding:10px; } .panel.bg { grid-column:1; grid-row:1; font-size:11px; line-height:1.3; } .panel.map { grid-column:2; grid-row:1; } .panel.impact-panel { grid-column:3; grid-row:1; } #assessment-map { min-height:310px; } #overview-map { position:relative; height:90px; margin-top:6px; } #overview-map > svg { visibility:hidden; } #overview-map::after { content:""; position:absolute; z-index:10; left:25%; top:25%; width:50%; height:50%; border:2px solid #1d4ed8; background:rgba(37,99,235,.2); -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 </style>
@@ -413,13 +409,13 @@ import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.3.0/dist/maplibre-g
   if (directFile) {
     const bytes = fflate.gzipSync(fflate.strToU8(JSON.stringify(project)), {level:9});
     let binary = ''; for (let i=0; i<bytes.length; i+=32768) binary += String.fromCharCode(...bytes.subarray(i,i+32768));
-    const encoded = btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
+    const encoded = btoa(binary).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/g,'');
     frame.src = viewerSrc.split('#')[0] + '#geolibreProject=' + encoded;
   } else frame.src = viewerSrc;
   const view = project.mapView || project.view || {};
   const center = Array.isArray(view.center) ? view.center : [${(w + e) / 2},${(s + n) / 2}];
   const zoom = Number.isFinite(view.zoom) ? view.zoom : 6;
-  const overview = new maplibregl.Map({ container:'overview-map', style:{version:8,sources:{osm:{type:'raster',tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],tileSize:256,attribution:'OpenStreetMap'}},layers:[{id:'osm',type:'raster',source:'osm'}]}, center, zoom:Math.max(1, zoom - 5), interactive:true, attributionControl:false });
+  const overview = new maplibregl.Map({ container:'overview-map', style:{version:8,sources:{carto:{type:'raster',tiles:['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],tileSize:256,attribution:'© OpenStreetMap contributors © CARTO'}},layers:[{id:'carto',type:'raster',source:'carto'}]}, center, zoom:Math.max(1, zoom - 5), interactive:true, attributionControl:false });
   const overlay = document.createElementNS('http://www.w3.org/2000/svg','svg');
   const polygon = document.createElementNS('http://www.w3.org/2000/svg','polygon');
   overlay.setAttribute('aria-label','Area of interest');
