@@ -4190,10 +4190,6 @@ export class OperaControl implements IControl {
     const granule = this._granules.find((g) => g.id === id);
     if (!granule) return;
     const oe = e.originalEvent as MouseEvent | undefined;
-    // The footprint click is handled by this control. Keep it from reaching a
-    // host-level click-away listener, which would immediately close the plugin
-    // panel after the selection succeeds.
-    oe?.stopPropagation();
     this.expand();
     this._applySelection(granule, {
       toggle: !!oe && (oe.ctrlKey || oe.metaKey),
