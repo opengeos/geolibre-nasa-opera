@@ -452,6 +452,9 @@ function mountDocked(app: AppAPI): boolean {
     id: RIGHT_PANEL_ID,
     title: "NASA OPERA",
     defaultWidth: pendingOperaState?.panelWidth ?? 340,
+    onOpen: () => control.setState({ collapsed: false }),
+    onCollapse: () => control.setState({ collapsed: true }),
+    onClose: () => control.setState({ collapsed: true }),
     render(container) {
       control.renderDocked(container, map);
       return () => control.teardownDocked();
@@ -602,6 +605,7 @@ export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
   version: "0.3.0",
+  restoresPanelCollapseState: true,
   activate(app) {
     if (!mountOpera(app)) return false;
     disposeToolbarMenu = registerToolbarMenu(app);

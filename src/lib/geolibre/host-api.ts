@@ -367,6 +367,11 @@ export interface GeoLibrePlugin<
   /** Semantic version; must match `plugin.json`'s `version`. */
   version: string;
   /**
+   * Whether the plugin persists and restores its own panel collapse state.
+   * Hosts should not force panels closed during project restoration when true.
+   */
+  restoresPanelCollapseState?: boolean;
+  /**
    * Query-parameter names this plugin owns. When the host opens a URL carrying
    * one of these, it auto-activates the plugin and routes the parameters to
    * {@link handleUrlParameters}.

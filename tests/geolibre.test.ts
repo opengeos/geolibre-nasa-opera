@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GeoLibreAppAPI, GeoLibreControl } from "../src/lib/geolibre/host-api";
+import type {
+  GeoLibreAppAPI,
+  GeoLibreControl,
+  GeoLibreRightPanelRegistration,
+} from "../src/lib/geolibre/host-api";
 import type { OperaControl, OperaState } from "../src/lib/core/OperaControl";
 
 async function freshPlugin() {
@@ -42,17 +46,21 @@ function dockingApp() {
     getCanvas: () => ({ style: {} }),
     queryRenderedFeatures: vi.fn(() => []),
   };
-  const state = { renders: 0, cleanups: 0, container: null as HTMLElement | null };
+  const state = {
+    renders: 0,
+    cleanups: 0,
+    container: null as HTMLElement | null,
+    registration: null as GeoLibreRightPanelRegistration | null,
+  };
   const app = {
     addMapControl: vi.fn(() => true),
     removeMapControl: vi.fn(),
     getMap: vi.fn(() => map),
     registerRightPanel: vi.fn(
-      (panel: {
-        render: (c: HTMLElement) => void | (() => void);
-      }) => {
+      (panel: GeoLibreRightPanelRegistration) => {
         const container = document.createElement("div");
         state.container = container;
+        state.registration = panel;
         const cleanup = panel.render(container);
         state.renders += 1;
         return vi.fn(() => {
@@ -249,6 +257,28 @@ describe("GeoLibre plugin entry", () => {
     expect(app.addMapControl).toHaveBeenCalledTimes(1);
     expect(app.registerToolbarMenu).toHaveBeenCalled();
     expect(plugin.getProjectState?.()).toMatchObject({ panelMode: "docked" });
+  });
+
+  it("owns restoration of its panel collapse state", async () => {
+    const plugin = await freshPlugin();
+
+    expect(plugin.restoresPanelCollapseState).toBe(true);
+  });
+
+  it("tracks host-managed docked panel collapse state", async () => {
+    const plugin = await freshPlugin();
+    const { app, state } = dockingApp();
+
+    plugin.activate(app);
+    state.registration?.onCollapse?.();
+    expect(plugin.getProjectState?.()).toMatchObject({
+      opera: expect.objectContaining({ collapsed: true }),
+    });
+
+    state.registration?.onOpen?.();
+    expect(plugin.getProjectState?.()).toMatchObject({
+      opera: expect.objectContaining({ collapsed: false }),
+    });
   });
 
   it("switches from docked to floating via the toolbar menu", async () => {
