@@ -351,8 +351,12 @@ describe("news", () => {
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body));
       expect(body.model).toBe("gpt-5.6-luna");
+      expect(body.max_tokens).toBe(2048);
       expect(body.tools).toContainEqual(
-        expect.objectContaining({ type: "web_search_20250305" }),
+        expect.objectContaining({
+          type: "web_search_20250305",
+          max_uses: 1,
+        }),
       );
       return Response.json({
         content: [

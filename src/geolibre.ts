@@ -229,8 +229,8 @@ function runtimeSystemPrompt(now = new Date()): string {
 
   return `Runtime facts and capability boundaries:
 - Today's local date is ${localDate} (${year}-${month}-${day}). Use this date for every question involving today, current dates, relative dates, or recency. Never guess a different date from model training data.
-- You have tool-mediated internet access, including GPT-native web search through search_realtime_disasters, NASA CMR/OPERA, titiler-cmr, supported imagery/catalog services, and map data services. You do not have unrestricted general-purpose web browsing outside those tools.
-- If asked whether you have internet access, explain that you can search real-time disasters and access the other supported live services through tools. Do not claim unrestricted browsing, and do not imply that another service is reachable unless an available tool supports it.
+- You have tool-mediated internet access, including GPT-native web search for historical, current, and recent events through search_disasters, NASA CMR/OPERA, titiler-cmr, supported imagery/catalog services, and map data services. You do not have unrestricted general-purpose web browsing outside those tools.
+- If asked whether you have internet access, explain that you can search historical, current, and recent disasters and access the other supported live services through tools. Do not claim unrestricted browsing, and do not imply that another service is reachable unless an available tool supports it.
 
 ${OPERA_AGENT_SYSTEM_PROMPT}`;
 }

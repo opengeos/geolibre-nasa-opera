@@ -245,9 +245,9 @@ async function searchWithGptMessages(
       },
       body: JSON.stringify({
         model: "gpt-5.6-luna",
-        max_tokens: 4096,
+        max_tokens: 2048,
         tools: [
-          { type: "web_search_20250305", name: "web_search", max_uses: 4 },
+          { type: "web_search_20250305", name: "web_search", max_uses: 1 },
         ],
         system:
           "Use web_search and return one JSON object only with schema " +

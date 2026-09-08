@@ -359,7 +359,7 @@ truncated.
 
 ### GPT web search proxy
 
-`search_realtime_disasters` and `news_impact_search` use GPT web search through
+`search_disasters` and `news_impact_search` use GPT web search through
 the server-side GeoLibre AI proxy. In a Docker GeoLibre deployment, the
 container exposes the Worker's `/search` route to this plugin through the
 authenticated, same-origin `/ai` route. Search credentials stay on the Worker

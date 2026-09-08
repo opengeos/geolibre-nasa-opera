@@ -40,6 +40,8 @@ describe("GPT news proxy Worker", () => {
     expect(body.tools).toEqual([{ type: "web_search" }]);
     expect(body.model).toBe("gpt-5.6-luna");
     expect(body.tool_choice).toBe("required");
+    expect(body.max_tool_calls).toBe(1);
+    expect(body.max_output_tokens).toBe(2048);
     expect(body.include).toEqual(["web_search_call.action.sources"]);
   });
 

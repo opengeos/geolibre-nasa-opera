@@ -171,6 +171,8 @@ export function buildGptSearchRequest(body, query, model = DEFAULT_MODEL) {
     model: String(model || DEFAULT_MODEL),
     tools: [{ type: "web_search" }],
     tool_choice: "required",
+    max_tool_calls: 1,
+    max_output_tokens: 2048,
     include: ["web_search_call.action.sources"],
     store: false,
     instructions:
