@@ -33,7 +33,6 @@ describe("OPERA agent tools", () => {
       "overture_in_flood",
       "population_in_flood",
       "search_realtime_disasters",
-      "tavily_search",
       "news_impact_search",
       "build_one_pager",
     ]);
@@ -58,6 +57,9 @@ describe("OPERA agent tools", () => {
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("overture_in_flood");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("population_in_flood");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("search_realtime_disasters");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "zoom or navigate to the location of a named disaster",
+    );
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "Navigating the map or adding a basemap is preparation, not completion",
     );
@@ -266,7 +268,6 @@ describe("OPERA agent tools", () => {
     expect(control.newsImpactSearchForAgent).toHaveBeenCalledWith({
       query: "Valencia flood deaths",
       maxResults: 5,
-      engine: "gpt",
     });
 
     await tools
@@ -281,18 +282,18 @@ describe("OPERA agent tools", () => {
       maxResults: 8,
       topic: "news",
       days: 7,
-      engine: "gpt",
     });
 
     await tools
-      .find((t) => t.name === "tavily_search")!
-      ._callback({ query: "current floods", days: 3, max_results: 4 });
+      .find((t) => t.name === "search_realtime_disasters")!
+      ._callback({
+        query: "Nepal floods August 2026",
+        max_results: 8,
+      });
     expect(control.newsImpactSearchForAgent).toHaveBeenLastCalledWith({
-      query: "current floods",
-      maxResults: 4,
-      topic: "news",
-      days: 3,
-      engine: "tavily",
+      query: "Nepal floods August 2026",
+      maxResults: 8,
+      topic: "general",
     });
 
     await tools

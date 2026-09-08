@@ -15,7 +15,7 @@ the OPERA panel's **Flood benchmark** section and ask the GeoAgent (see the
 1. `lockBenchmark` on [`../sample-benchmark-valencia.geojson`](../sample-benchmark-valencia.geojson).
 2. `fetchOsmBuildings` (Overpass) → `buildingsInFlood` — building exposure.
 3. `searchNews` routed through the actual `workers/news-proxy.js` code
-   in-process → real Tavily (no deployed Worker needed).
+   in-process using GPT web search (no deployed Worker needed).
 4. OpenAI Responses API — extracts cited impact figures + a short narrative.
 5. NASA CMR + titiler-cmr — OPERA DSWx-HLS surface-water tiles (water-only
    colormap), rendered with MapLibre over an OSM basemap via Playwright.
@@ -28,7 +28,6 @@ npm install
 npm run build:lib                    # produces dist/index.mjs (imported by the driver)
 npm install -D playwright            # the map step needs Playwright (not a core dep)
 npx playwright install chromium      # download the Chromium build
-export TAVILY_API_KEY=...
 export OPENAI_API_KEY=...
 ```
 
@@ -48,7 +47,7 @@ config) are written to a temp directory and not kept.
 
 ## Notes
 
-- Uses live networks: Overpass, Tavily, OpenAI, NASA CMR, titiler-cmr, and OSM
+- Uses live networks: Overpass, OpenAI, NASA CMR, titiler-cmr, and OSM
   tiles. Overpass is rate-limited; the driver retries across mirrors with backoff.
 - Event details (name, dates, AOI) are hard-coded for the Valencia example. To
   adapt it, swap the benchmark GeoJSON and edit the `event`, the news query, and

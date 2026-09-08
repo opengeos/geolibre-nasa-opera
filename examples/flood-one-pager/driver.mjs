@@ -3,7 +3,7 @@
 // Reproduces examples/opera-one-pager-valencia.html by exercising the REAL
 // integrations the plugin uses — no mocks:
 //   - Overpass (OSM buildings) via fetchOsmBuildings + buildingsInFlood
-//   - the actual workers/news-proxy.js Worker code, run in-process, -> real Tavily
+//   - the actual workers/news-proxy.js Worker code, run in-process, using GPT web search
 //   - the OpenAI Responses API (narrative + cited impact extraction)
 //   - OPERA DSWx-HLS tiles via NASA CMR + titiler-cmr (water-only colormap)
 //   - MapLibre + OSM basemap rendered headless by Playwright (map snapshot)
@@ -14,7 +14,7 @@
 //
 // Prerequisites:
 //   npm install && npm run build:lib      # produces dist/index.mjs
-//   export TAVILY_API_KEY=...  OPENAI_API_KEY=...
+//   export OPENAI_API_KEY=...
 //   node examples/flood-one-pager/driver.mjs [output.html]
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -34,10 +34,9 @@ const { lockBenchmark, fetchOsmBuildings, buildingsInFlood, searchNews, buildOne
   DEFAULT_TITILER_CMR_ENDPOINT } = lib;
 const { handleRequest } = await import(path.join(REPO, "workers/news-proxy.js"));
 
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!TAVILY_API_KEY || !OPENAI_API_KEY) {
-  throw new Error("Set TAVILY_API_KEY and OPENAI_API_KEY in the environment.");
+if (!OPENAI_API_KEY) {
+  throw new Error("Set OPENAI_API_KEY in the environment.");
 }
 
 const log = (...a) => console.log("•", ...a);
@@ -92,7 +91,7 @@ const buildings = {
   source: "OpenStreetMap (Overpass)",
 };
 
-// 3) News impacts — REAL Worker code in-process -> REAL Tavily.
+// 3) News impacts via the real Worker code and GPT web search.
 //    fetchImpl routes searchNews through the actual handleRequest with the real
 //    key, so no deployed Worker is needed; this still exercises the Worker's
 //    CORS + error-body handling. (endpoint is a placeholder the fetchImpl ignores.)
@@ -100,9 +99,9 @@ const workerFetch = (url, init = {}) => {
   const headers = new Headers(init.headers || {});
   headers.set("Origin", "http://localhost:5173");
   const req = new Request(url, { ...init, headers });
-  return handleRequest(req, { TAVILY_API_KEY, ALLOWED_ORIGINS: "http://localhost:5173" });
+  return handleRequest(req, { OPENAI_API_KEY, ALLOWED_ORIGINS: "http://localhost:5173" });
 };
-log("Searching news via the news-proxy Worker -> Tavily (real)…");
+log("Searching news via the GPT web-search proxy (real)…");
 const news = await searchNews(
   "Valencia Spain DANA flood October 2024 death toll damages people affected",
   { maxResults: 6, endpoint: "http://localhost:8788", fetchImpl: workerFetch },

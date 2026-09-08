@@ -585,8 +585,6 @@ export interface OperaAgentNewsParams {
   topic?: "general" | "news";
   /** Number of recent days to search when topic is news. */
   days?: number;
-  /** Search engine; GPT-native web search is the default. */
-  engine?: "gpt" | "tavily";
 }
 
 export interface OperaAgentNewsResult {
@@ -3150,13 +3148,12 @@ export class OperaControl implements IControl {
     const query = params.query?.trim();
     if (!query)
       return { ok: false, status: "Provide a search query.", results: [] };
-    this._setStatus("Searching live disaster news…");
+    this._setStatus("Searching disaster reports…");
     try {
       const { results, answer } = await searchNews(query, {
         maxResults: params.maxResults,
         topic: params.topic,
         days: params.days,
-        engine: params.engine,
       });
       const status = `Found ${results.length} news result(s).`;
       this._setStatus(status);

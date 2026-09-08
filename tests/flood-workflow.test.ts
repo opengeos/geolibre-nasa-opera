@@ -30,6 +30,7 @@ import {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // A 1x1 degree square around [0,0].
@@ -311,7 +312,7 @@ describe("news", () => {
     );
   });
 
-  it("searchNews normalizes Tavily results", async () => {
+  it("searchNews normalizes GPT web search results", async () => {
     const fetchImpl = vi.fn(
       async () =>
         new Response(
@@ -346,19 +347,26 @@ describe("news", () => {
     );
   });
 
-  it("uses Tavily only when explicitly selected", async () => {
-    const fetchImpl = vi.fn(async () =>
-      Response.json({ results: [] }),
+  it("allows enough time for GPT web search to complete", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+          setTimeout(() => resolve(Response.json({ results: [] })), 20_000);
+        }),
     );
-    await searchNews("current floods", {
-      endpoint: "https://news.example.com",
-      engine: "tavily",
+
+    const pending = searchNews("Nepal floods August 2026", {
+      endpoint: "https://geolibre.example.com/ai",
+      topic: "general",
       fetchImpl: fetchImpl as never,
     });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://news.example.com/tavily",
-      expect.any(Object),
-    );
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await expect(pending).resolves.toMatchObject({ results: [] });
   });
 
   it("uses GPT native web search directly in a configured local build", async () => {
@@ -391,7 +399,7 @@ describe("news", () => {
       endpoint: "",
       topic: "news",
       gptApiKey: "local-test-key",
-      gptBaseUrl: "https://cli.example.com",
+      gptBaseUrl: "https://cli.example.com/v1",
       fetchImpl: fetchImpl as never,
     });
     expect(fetchImpl).toHaveBeenCalledWith(

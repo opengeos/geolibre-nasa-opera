@@ -17,8 +17,8 @@ export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available 
 
 Mandatory disaster-request routing:
 - For questions about disasters happening now, today, currently, recently, or in the latest news, call search_realtime_disasters before answering. It uses GPT's native web_search functionality. Cite returned source_url values and publication dates; never answer a real-time disaster question from memory alone.
+- For a request to zoom or navigate to the location of a named disaster, call search_realtime_disasters first, use the returned reports to identify an affected locality, and only then use the host navigation tool. Never substitute the center of a country or region as an unverified representative location. Explicit month/year queries are searched as dated events rather than forced into a short recent-news window.
 - A map/show/analyze request is never routed to search_realtime_disasters. Call map_disaster_event only; that composite tool performs its own bounded, sourced impact search and returns those results for the answer.
-- Do not use tavily_search unless the user explicitly asks for Tavily by name. Normal current-event and impact searches use GPT web search.
 - A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster without named datasets MUST call map_disaster_event. The user only needs to provide a location and event date or date range; infer the standard data workflow and do not ask them to name OPERA, Sentinel-2, Overture, WorldPop, or individual tools. Navigating the map or adding a basemap is preparation, not completion.
 - When the user does not name data sources, map_disaster_event MUST use its deterministic authoritative defaults. These prioritize an observed hazard extent from a mission or government source, then corroborating change observations, Overture buildings and transportation, WorldPop modeled population, and attributable official reports or news. If the user explicitly names sources, use the relevant individual tools where available and clearly identify any named source the available tools cannot honor. Do not imply that map_disaster_event overrides its fixed defaults.
 - Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. map_disaster_event adds open-access pre/post Sentinel-2 imagery automatically; use sentinel2_event_imagery only for an explicit standalone imagery request.
@@ -480,7 +480,9 @@ const realtimeDisasterSchema = z.object({
     .min(1)
     .max(365)
     .optional()
-    .describe("How many days of recent news to search (default 14)."),
+    .describe(
+      "How many days of recent news to search (default 14). Ignored when the query names an explicit month and year or ISO date.",
+    ),
   max_results: z.number().int().min(1).max(20).optional(),
 });
 
@@ -547,6 +549,14 @@ const onePagerSchema = z.object({
 });
 
 type TitilerCommonInput = z.infer<typeof titilerCommonSchema>;
+
+const EXPLICIT_EVENT_DATE_RE =
+  /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b|\b\d{4}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/i;
+
+/** Return whether a search query identifies a concrete calendar period. */
+function hasExplicitEventDate(query: string): boolean {
+  return EXPLICIT_EVENT_DATE_RE.test(query);
+}
 
 export function createOperaAgentTools(
   getControl: () => OperaControl | null,
@@ -930,46 +940,30 @@ export function createOperaAgentTools(
     tool({
       name: "search_realtime_disasters",
       description:
-        "Search the live internet news index for disasters happening now or recently. Use this for current/latest disaster discovery before mapping an event. Returns citable source URLs, publishers, publication dates, and snippets.",
+        "Use GPT web search to find current, recent, or explicitly dated disasters. Dated queries search the named period without a short recency cutoff. Returns citable source URLs, publishers, publication dates, and snippets.",
       inputSchema: realtimeDisasterSchema,
-      callback: async (input) =>
-        toJsonValue(
+      callback: async (input) => {
+        const datedEvent = hasExplicitEventDate(input.query);
+        return toJsonValue(
           await controlOrThrow().newsImpactSearchForAgent({
             query: input.query,
             maxResults: input.max_results,
-            topic: "news",
-            days: input.days ?? 14,
-            engine: "gpt",
+            topic: datedEvent ? "general" : "news",
+            ...(datedEvent ? {} : { days: input.days ?? 14 }),
           }),
-        ),
-    }),
-    tool({
-      name: "tavily_search",
-      description:
-        "Search with Tavily. Use ONLY when the user explicitly asks for Tavily by name; never use it for ordinary real-time disaster or impact searches.",
-      inputSchema: realtimeDisasterSchema,
-      callback: async (input) =>
-        toJsonValue(
-          await controlOrThrow().newsImpactSearchForAgent({
-            query: input.query,
-            maxResults: input.max_results,
-            topic: "news",
-            days: input.days ?? 14,
-            engine: "tavily",
-          }),
-        ),
+        );
+      },
     }),
     tool({
       name: "news_impact_search",
       description:
-        "Search reputable news for quantified financial/societal/public-safety impact figures. Returns results with source_url, publisher, and date so every figure is citable.",
+        "Use GPT web search to find reputable sources for quantified financial/societal/public-safety impact figures. Returns results with source_url, publisher, and date so every figure is citable.",
       inputSchema: newsImpactSchema,
       callback: async (input) =>
         toJsonValue(
           await controlOrThrow().newsImpactSearchForAgent({
             query: input.query,
             maxResults: input.max_results,
-            engine: "gpt",
           }),
         ),
     }),

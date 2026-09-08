@@ -357,18 +357,18 @@ Overture analysis requires a GeoLibre host that provides `activatePlugin` and
 agent returns an error instead of reporting partial exposure when a result is
 truncated.
 
-### News search proxy (Tavily)
+### GPT web search proxy
 
-`news_impact_search` calls Tavily through a server-side proxy. In a Docker
-GeoLibre deployment, the recommended setup is to store `TAVILY_API_KEY` as a
-secret on the `geolibre-ai-proxy` Worker. The container automatically exposes
-that Worker's `/tavily` route to this plugin through the authenticated,
-same-origin `/ai` route. Do not pass `TAVILY_API_KEY` to the container.
+`search_realtime_disasters` and `news_impact_search` use GPT web search through
+the server-side GeoLibre AI proxy. In a Docker GeoLibre deployment, the
+container exposes the Worker's `/search` route to this plugin through the
+authenticated, same-origin `/ai` route. Search credentials stay on the Worker
+and are never sent to the browser.
 
 For a standalone plugin deployment, the included news Worker is an alternative:
 
 ```bash
-npx wrangler secret put TAVILY_API_KEY --config wrangler.news.toml
+npx wrangler secret put OPENAI_API_KEY --config wrangler.news.toml
 npm run news-proxy:deploy      # or: npm run news-proxy:dev  (local, port 8788)
 ```
 
@@ -384,7 +384,7 @@ rest of the workflow (benchmark, buildings, one-pager) still works.
 
 The Worker fails closed: `ALLOWED_ORIGINS` defaults to local development origins
 (set it to your deployed origin(s), or `*` only if you intentionally want any
-origin to use the proxy). To keep the proxy from being an open Tavily relay for
+origin to use the proxy). To keep the proxy from being an open search relay for
 non-browser clients, optionally set a `CLIENT_SECRET` secret and have callers
 send a matching `X-Client-Secret` header:
 
