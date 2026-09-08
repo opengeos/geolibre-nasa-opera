@@ -347,6 +347,46 @@ describe("news", () => {
     );
   });
 
+  it("uses the managed GeoLibre GPT messages route instead of /ai/search", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.model).toBe("gpt-5.6-luna");
+      expect(body.tools).toContainEqual(
+        expect.objectContaining({ type: "web_search_20250305" }),
+      );
+      return Response.json({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              answer: "Flooding affected central Nepal.",
+              results: [
+                {
+                  title: "Official flood update",
+                  url: "https://example.gov.np/flood-update",
+                  content: "Flooding affected Rasuwa.",
+                  published_date: "2026-08-26",
+                },
+              ],
+            }),
+          },
+        ],
+      });
+    });
+
+    const out = await searchNews("Nepal floods August 2026", {
+      endpoint: "/ai",
+      topic: "general",
+      fetchImpl: fetchImpl as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/ai/v1/messages",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(out.results[0]?.publisher).toBe("example.gov.np");
+  });
+
   it("allows enough time for GPT web search to complete", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi.fn(
@@ -355,7 +395,20 @@ describe("news", () => {
           init.signal?.addEventListener("abort", () =>
             reject(new DOMException("Aborted", "AbortError")),
           );
-          setTimeout(() => resolve(Response.json({ results: [] })), 20_000);
+          setTimeout(
+            () =>
+              resolve(
+                Response.json({
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({ answer: "", results: [] }),
+                    },
+                  ],
+                }),
+              ),
+            20_000,
+          );
         }),
     );
 

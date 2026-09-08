@@ -116,6 +116,16 @@ function gptMessagesEndpoint(baseUrl: string): string {
     : `${normalized}/v1/messages`;
 }
 
+/** Return whether an endpoint is GeoLibre's same-origin managed AI proxy. */
+function isManagedGeoLibreAiEndpoint(endpoint: string): boolean {
+  try {
+    const pathname = new URL(endpoint, "https://geolibre.invalid").pathname;
+    return pathname.replace(/\/+$/, "") === "/ai";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Search reputable sources for disaster events and quantified impacts through
  * GPT web search. Throws a descriptive Error when no proxy is configured.
@@ -143,6 +153,13 @@ export async function searchNews(
       "GPT web-search proxy is not configured. Set VITE_NEWS_PROXY_ENDPOINT (or the " +
         "GeoLibre Docker news proxy runtime setting) to the deployed news Worker URL.",
     );
+  }
+  if (isManagedGeoLibreAiEndpoint(endpoint)) {
+    return searchWithGptMessages(query, {
+      ...options,
+      apiKey: options.gptApiKey || "geolibre-managed-proxy",
+      baseUrl: endpoint,
+    });
   }
   const doFetch = options.fetchImpl ?? fetch;
   const controller = new AbortController();

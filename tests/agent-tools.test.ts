@@ -10,7 +10,10 @@ describe("OPERA agent tools", () => {
   });
 
   it("registers OPERA search and display tools", () => {
-    const tools = createOperaAgentTools(() => null) as Array<{ name: string }>;
+    const tools = createOperaAgentTools(() => null) as Array<{
+      name: string;
+      description: string;
+    }>;
 
     expect(tools.map((item) => item.name)).toEqual([
       "get_opera_context",
@@ -60,6 +63,12 @@ describe("OPERA agent tools", () => {
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "zoom or navigate to the location of a named disaster",
     );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "A zoom or navigation request is not a map, show, or analyze request",
+    );
+    expect(
+      tools.find((item) => item.name === "map_disaster_event")?.description,
+    ).toContain("Never call this tool for a request that only asks to zoom");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "Navigating the map or adding a basemap is preparation, not completion",
     );
