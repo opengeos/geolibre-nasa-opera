@@ -54,6 +54,14 @@ describe("GPT news proxy Worker", () => {
     expect(request.text.format.schema.properties.results.maxItems).toBe(8);
   });
 
+  it("uses a broad authoritative scope for an undated general query", () => {
+    const request = buildGptSearchRequest({}, "major Nepal disasters");
+
+    expect(request.input).toContain("Search broadly");
+    expect(request.input).not.toContain("exact period");
+    expect(request.input).not.toContain("last 14 days");
+  });
+
   it("normalizes an OpenAI-compatible base URL ending in /v1", async () => {
     const upstream = vi.fn(async () =>
       Response.json({
@@ -103,6 +111,25 @@ describe("GPT news proxy Worker", () => {
     };
 
     expect(normalizeGptSearchResponse(payload).results).toHaveLength(1);
+  });
+
+  it("returns no results when GPT supplies no verified source URLs", () => {
+    const payload = {
+      output: [],
+      output_text: JSON.stringify({
+        answer: "Flooding affected Nepal.",
+        results: [
+          {
+            title: "Unverified report",
+            url: "https://invented.example/flood",
+            content: "An unsupported claim.",
+            published_date: "2026-08-20",
+          },
+        ],
+      }),
+    };
+
+    expect(normalizeGptSearchResponse(payload).results).toHaveLength(0);
   });
 
   it("rejects unknown paths", async () => {

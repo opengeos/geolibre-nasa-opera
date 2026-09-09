@@ -75,7 +75,7 @@ export interface SearchNewsOptions {
   endpoint?: string;
   /** Search scope. General searches allow retrospective event sources. */
   topic?: "general" | "news";
-  /** For the "news" topic, how many days back to search (Worker default 3650). */
+  /** For the "news" topic, how many days back to search (default 14). */
   days?: number;
   /** Direct GPT search settings used by controlled local builds. */
   gptApiKey?: string;

@@ -160,11 +160,14 @@ export function buildGptSearchRequest(body, query, model = DEFAULT_MODEL) {
     ),
     20,
   );
-  const datedScope = body?.topic === "general";
+  const recencyScope = body?.topic === "news";
+  const datedScope = /\b(?:1[6-9]|20)\d{2}\b/.test(query);
   const days = Math.min(Math.max(Number(body?.days) || 14, 1), 3650);
-  const scope = datedScope
-    ? "The query identifies a dated event. Search that exact period and prefer authoritative sources."
-    : `Prefer sources published within the last ${days} days.`;
+  const scope = recencyScope
+    ? `Prefer sources published within the last ${days} days.`
+    : datedScope
+      ? "The query identifies a dated event. Search that exact period and prefer authoritative sources."
+      : "Search broadly across relevant time periods and prefer authoritative sources.";
 
   return {
     model: String(model || DEFAULT_MODEL),
@@ -246,10 +249,7 @@ export function normalizeGptSearchResponse(payload) {
   }
 
   const results = (Array.isArray(parsed?.results) ? parsed.results : []).filter(
-    (item) =>
-      item &&
-      typeof item.url === "string" &&
-      (searchedUrls.size === 0 || searchedUrls.has(item.url)),
+    (item) => item && typeof item.url === "string" && searchedUrls.has(item.url),
   );
   return {
     answer: typeof parsed?.answer === "string" ? parsed.answer : "",

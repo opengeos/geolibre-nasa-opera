@@ -361,9 +361,9 @@ truncated.
 
 `search_disasters` and `news_impact_search` use GPT web search through
 the server-side GeoLibre AI proxy. In a Docker GeoLibre deployment, the
-container exposes the Worker's `/search` route to this plugin through the
-authenticated, same-origin `/ai` route. Search credentials stay on the Worker
-and are never sent to the browser.
+plugin uses the authenticated, same-origin `/ai/v1/messages` route. The Docker
+proxy injects its server-side credential, so search credentials are never sent
+to the browser.
 
 For a standalone plugin deployment, the included news Worker is an alternative:
 
@@ -372,7 +372,8 @@ npx wrangler secret put OPENAI_API_KEY --config wrangler.news.toml
 npm run news-proxy:deploy      # or: npm run news-proxy:dev  (local, port 8788)
 ```
 
-Point the plugin at a standalone Worker with the `VITE_NEWS_PROXY_ENDPOINT`
+The standalone Worker accepts `POST /search`. Point the plugin at it with the
+`VITE_NEWS_PROXY_ENDPOINT`
 build variable, the `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` window global, or
 GeoLibre's `GEOLIBRE_NASA_OPERA_NEWS_PROXY_ENDPOINT` Docker variable.
 At runtime, the plugin checks an explicit tool override first, then the window
