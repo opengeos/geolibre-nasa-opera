@@ -3089,7 +3089,7 @@ export class OperaControl implements IControl {
         opacity: Math.max(0, Math.min(1, params.opacity ?? 0.78)),
         fitBounds: false,
         bounds: scene.bbox,
-        beforeId: this._firstVectorLayerId(),
+        beforeId: this._imageryInsertionLayerId(),
         metadata: {
           sourceKind: "sentinel-2-event-imagery",
           provider: scene.provider,
@@ -3603,8 +3603,13 @@ export class OperaControl implements IControl {
     return id;
   }
 
-  /** Return the lowest vector style layer so imagery stays below vectors. */
-  private _firstVectorLayerId(): string | undefined {
+  /** Prefer the basemap airport layer, then fall back to its lowest vector. */
+  private _imageryInsertionLayerId(): string | undefined {
+    const layers = this._map?.getStyle().layers ?? [];
+    const airportLayer = layers.find(
+      (layer) => layer.id.toLowerCase() === "airport",
+    );
+    if (airportLayer) return airportLayer.id;
     const vectorTypes = new Set([
       "circle",
       "fill",
@@ -3613,9 +3618,7 @@ export class OperaControl implements IControl {
       "line",
       "symbol",
     ]);
-    return this._map
-      ?.getStyle()
-      .layers?.find((layer) => vectorTypes.has(layer.type))?.id;
+    return layers.find((layer) => vectorTypes.has(layer.type))?.id;
   }
 
   private _bottomOvertureLayerId(): string | undefined {
