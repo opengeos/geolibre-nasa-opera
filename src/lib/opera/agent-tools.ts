@@ -24,6 +24,7 @@ Mandatory disaster-request routing:
 - When the user does not name data sources, map_disaster_event MUST use its deterministic authoritative defaults. These prioritize an observed hazard extent from a mission or government source, then corroborating change observations, Overture buildings and transportation, WorldPop modeled population, and attributable official reports or news. If the user explicitly names sources, use the relevant individual tools where available and clearly identify any named source the available tools cannot honor. Do not imply that map_disaster_event overrides its fixed defaults.
 - Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. map_disaster_event adds open-access pre/post Sentinel-2 imagery automatically; use sentinel2_event_imagery only for an explicit standalone imagery request.
 - For a default-source request, call map_disaster_event once with hazard, place, start, and end. A user-drawn AOI is applied automatically and takes precedence over model-supplied bounds; otherwise omit bbox and let the composite tool resolve the named place. The composite tool adds the correct contextual and impact layers and downloads a one-page event assessment after the layers finish loading.
+- Always pass the most specific place named by the user without broadening it to a city, province, state, or region. For example, if the request names Paiporta within Valencia, use place="Paiporta, Valencia, Spain", not place="Valencia Region, Spain". The mapped exposure and report subtitle must retain that same local scope.
 - Never call map_disaster_event more than once for the same user request, even when its result contains warnings or lacks one optional source. Report those limitations from the first result instead of retrying the whole composite workflow.
 - A state or region plus a month is a sufficiently bounded event request even when no individual incident is named. Map the matching regional NASA event; do not ask which incident the user means and do not fall back to map_disaster_context. In particular, "Map the Colorado Fire in July 2026" and "Map Colorado Fires July 2026" both mean the statewide NASA Earthdata GIS event "Colorado Fires July 2026": call map_disaster_event exactly once with hazard="wildfire", place="Colorado", start="2026-07-01", and end="2026-07-31".
 - If dates are omitted but the hazard and place clearly identify a well-known historical event, use the event's established date window and state that assumption. Do not stop to request confirmation merely because dates were omitted. For example, "Flood in Valencia Region, Spain" refers to the late-October 2024 DANA flood; use 2024-10-27 through 2024-11-05 unless the user specifies another event.
@@ -407,7 +408,7 @@ const disasterEventSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Geographic place named by the user, e.g. Colorado. Always extract it from the request; the tool geocodes it when bbox is omitted.",
+      "Most specific geographic place named by the user, preserving nested locality context, e.g. 'Paiporta, Valencia, Spain' or 'Colorado'. Never broaden a named locality to its city, province, state, or region. The tool geocodes it when bbox is omitted.",
     ),
   event_name: z.string().optional().describe("Concise human event label."),
   bbox: bboxSchema.describe(

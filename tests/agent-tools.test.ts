@@ -97,6 +97,12 @@ describe("OPERA agent tools", () => {
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "use 2024-10-27 through 2024-11-05",
     );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "most specific place named by the user",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      'place="Paiporta, Valencia, Spain"',
+    );
   });
 
   it("gates benchmark tools when no control is active", () => {
