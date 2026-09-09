@@ -2,7 +2,7 @@
 # https://zensical.org/docs/
 
 [project]
-site_name = "NASA OPERA for GeoLibre"
+site_name = "OPERA Plugin for GeoLibre"
 site_description = """
 A GeoLibre plugin that searches NASA OPERA products through CMR, renders them \
 with titiler-cmr, and turns a place and a date range into a flood impact \
