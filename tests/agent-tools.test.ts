@@ -10,7 +10,10 @@ describe("OPERA agent tools", () => {
   });
 
   it("registers OPERA search and display tools", () => {
-    const tools = createOperaAgentTools(() => null) as Array<{ name: string }>;
+    const tools = createOperaAgentTools(() => null) as Array<{
+      name: string;
+      description: string;
+    }>;
 
     expect(tools.map((item) => item.name)).toEqual([
       "get_opera_context",
@@ -32,8 +35,7 @@ describe("OPERA agent tools", () => {
       "buildings_in_flood",
       "overture_in_flood",
       "population_in_flood",
-      "search_realtime_disasters",
-      "tavily_search",
+      "search_disasters",
       "news_impact_search",
       "build_one_pager",
     ]);
@@ -57,7 +59,22 @@ describe("OPERA agent tools", () => {
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("sentinel2_event_imagery");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("overture_in_flood");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("population_in_flood");
-    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("search_realtime_disasters");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain("search_disasters");
+    expect(OPERA_AGENT_SYSTEM_PROMPT).not.toContain(
+      "search_realtime_disasters",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "reuse those results for follow-up questions about the same event",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "zoom or navigate to the location of a named disaster",
+    );
+    expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
+      "A zoom or navigation request is not a map, show, or analyze request",
+    );
+    expect(
+      tools.find((item) => item.name === "map_disaster_event")?.description,
+    ).toContain("Never call this tool for a request that only asks to zoom");
     expect(OPERA_AGENT_SYSTEM_PROMPT).toContain(
       "Navigating the map or adding a basemap is preparation, not completion",
     );
@@ -90,6 +107,66 @@ describe("OPERA agent tools", () => {
     const getBenchmark = tools.find((t) => t.name === "get_benchmark")!;
     // With no active control, controlOrThrow throws.
     expect(() => getBenchmark._callback({})).toThrow(/not active/i);
+  });
+
+  it("reuses an identical disaster search instead of repeating web search", async () => {
+    const control = {
+      newsImpactSearchForAgent: vi.fn(async () => ({
+        ok: true,
+        results: [{ sourceUrl: "https://example.com/report" }],
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const search = tools.find((item) => item.name === "search_disasters")!;
+
+    await search._callback({ query: "Nepal floods August 2026" });
+    await search._callback({ query: "  nepal   floods august 2026  " });
+
+    expect(control.newsImpactSearchForAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds the duplicate disaster search cache", async () => {
+    const control = {
+      newsImpactSearchForAgent: vi.fn(async () => ({
+        ok: true,
+        results: [],
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const search = tools.find((item) => item.name === "search_disasters")!;
+
+    for (let index = 0; index < 21; index += 1) {
+      await search._callback({ query: `historical disaster ${index}` });
+    }
+    await search._callback({ query: "historical disaster 0" });
+
+    expect(control.newsImpactSearchForAgent).toHaveBeenCalledTimes(22);
+  });
+
+  it("uses one timestamp when inserting a disaster search cache entry", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const control = {
+      newsImpactSearchForAgent: vi.fn(async () => ({
+        ok: true,
+        results: [],
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const search = tools.find((item) => item.name === "search_disasters")!;
+
+    await search._callback({ query: "historical disaster" });
+
+    expect(nowSpy).toHaveBeenCalledTimes(1);
+    nowSpy.mockRestore();
   });
 
   it("forwards benchmark workflow inputs to the control", async () => {
@@ -266,11 +343,10 @@ describe("OPERA agent tools", () => {
     expect(control.newsImpactSearchForAgent).toHaveBeenCalledWith({
       query: "Valencia flood deaths",
       maxResults: 5,
-      engine: "gpt",
     });
 
     await tools
-      .find((t) => t.name === "search_realtime_disasters")!
+      .find((t) => t.name === "search_disasters")!
       ._callback({
         query: "current floods worldwide",
         days: 7,
@@ -281,18 +357,30 @@ describe("OPERA agent tools", () => {
       maxResults: 8,
       topic: "news",
       days: 7,
-      engine: "gpt",
     });
 
     await tools
-      .find((t) => t.name === "tavily_search")!
-      ._callback({ query: "current floods", days: 3, max_results: 4 });
+      .find((t) => t.name === "search_disasters")!
+      ._callback({
+        query: "Nepal floods August 2026",
+        max_results: 8,
+      });
     expect(control.newsImpactSearchForAgent).toHaveBeenLastCalledWith({
-      query: "current floods",
-      maxResults: 4,
-      topic: "news",
-      days: 3,
-      engine: "tavily",
+      query: "Nepal floods August 2026",
+      maxResults: 8,
+      topic: "general",
+    });
+
+    await tools
+      .find((t) => t.name === "search_disasters")!
+      ._callback({
+        query: "Valencia DANA flood October 2024 news",
+        max_results: 6,
+      });
+    expect(control.newsImpactSearchForAgent).toHaveBeenLastCalledWith({
+      query: "Valencia DANA flood October 2024 news",
+      maxResults: 6,
+      topic: "general",
     });
 
     await tools

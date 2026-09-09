@@ -1,17 +1,19 @@
 /**
- * News search proxy Worker for the constrained flood one-pager.
+ * GPT web-search proxy for OPERA GeoAgent disaster searches.
  *
- * The browser cannot call the Tavily search API directly (the API key must stay
- * server-side, and CORS). This Worker exposes a Tavily-backed search endpoint at
- * `POST /search` (and its original `POST /tavily` alias) that injects the
- * `TAVILY_API_KEY` secret and forwards to Tavily, adding CORS headers so the
- * plugin's `news_impact_search` tool can reach it. Set the
- * secret with `wrangler secret put TAVILY_API_KEY --config wrangler.news.toml`;
- * it is never shipped in the browser bundle.
+ * The browser posts a query to `POST /search`. This Worker keeps the OpenAI API
+ * key server-side, invokes the Responses API web-search tool, and returns the
+ * normalized result envelope consumed by `src/lib/opera/news.ts`.
  */
 
-const CORS_HEADERS = ["accept", "authorization", "content-type", "x-client-secret"];
-const TAVILY_ENDPOINT = "https://api.tavily.com/search";
+const CORS_HEADERS = [
+  "accept",
+  "authorization",
+  "content-type",
+  "x-client-secret",
+];
+const OPENAI_ENDPOINT = "https://api.openai.com";
+const DEFAULT_MODEL = "gpt-5.6-luna";
 
 export default {
   async fetch(request, env) {
@@ -42,29 +44,21 @@ export async function handleRequest(request, env = {}) {
     return jsonResponse(
       {
         ok: true,
-        usage: "POST /search (alias: /tavily) { query, max_results } — set VITE_NEWS_PROXY_ENDPOINT to this Worker URL.",
-        keyConfigured: Boolean(env.TAVILY_API_KEY),
+        usage: "POST /search { query, max_results, topic?, days? }",
+        keyConfigured: Boolean(env.OPENAI_API_KEY),
       },
       cors,
     );
   }
 
-  // The client posts to /search by default and to /tavily when Tavily is
-  // explicitly requested; both resolve to the same Tavily-backed handler.
-  if (
-    (url.pathname !== "/search" && url.pathname !== "/tavily") ||
-    request.method !== "POST"
-  ) {
+  if (url.pathname !== "/search" || request.method !== "POST") {
     return jsonResponse(
-      { ok: false, error: "Only POST /search (alias: /tavily) is supported." },
+      { ok: false, error: "Only POST /search is supported." },
       cors,
       404,
     );
   }
 
-  // Optional shared-secret gate so the proxy is not an open Tavily relay. When
-  // CLIENT_SECRET is set, callers must send a matching `X-Client-Secret` header;
-  // when it is unset the check is skipped (backward compatible).
   const clientSecret = String(env.CLIENT_SECRET || "").trim();
   if (clientSecret && request.headers.get("X-Client-Secret") !== clientSecret) {
     return jsonResponse(
@@ -74,82 +68,225 @@ export async function handleRequest(request, env = {}) {
     );
   }
 
-  const apiKey = String(env.TAVILY_API_KEY || "").trim();
+  const apiKey = String(env.OPENAI_API_KEY || "").trim();
   if (!apiKey) {
     return jsonResponse(
-      { ok: false, error: "TAVILY_API_KEY secret is not configured on the Worker." },
+      {
+        ok: false,
+        error: "OPENAI_API_KEY secret is not configured on the Worker.",
+      },
       cors,
       500,
     );
   }
 
-  let payload;
+  let body;
   try {
-    payload = await request.json();
+    body = await request.json();
   } catch {
-    return jsonResponse({ ok: false, error: "Request body must be JSON." }, cors, 400);
+    return jsonResponse(
+      { ok: false, error: "Request body must be JSON." },
+      cors,
+      400,
+    );
   }
-  const query = String(payload?.query || "").trim();
+  const query = String(body?.query || "").trim();
   if (!query) {
-    return jsonResponse({ ok: false, error: "A non-empty 'query' is required." }, cors, 400);
-  }
-  const maxResults = Math.min(Math.max(Number(payload?.max_results) || 6, 1), 20);
-  // A locked flood benchmark is retrospective (QAed after the event), so the
-  // default must not be recency-limited: Tavily's "news" topic only returns the
-  // last few days, which misses events older than that. "general" surfaces
-  // authoritative retrospective sources (official reports, encyclopedic, and
-  // news). Callers may still request "news" and pass a wide `days` window.
-  const topic = payload?.topic === "news" ? "news" : "general";
-  const tavilyBody = {
-    query,
-    max_results: maxResults,
-    topic,
-    search_depth: "advanced",
-    include_answer: true,
-  };
-  if (topic === "news") {
-    // Default to a wide window so older events remain reachable; clamp override.
-    const days = Math.min(Math.max(Number(payload?.days) || 3650, 1), 3650);
-    tavilyBody.days = days;
+    return jsonResponse(
+      { ok: false, error: "A non-empty 'query' is required." },
+      cors,
+      400,
+    );
   }
 
+  const requestBody = buildGptSearchRequest(body, query, env.OPENAI_MODEL);
+  const baseUrl = String(env.OPENAI_BASE_URL || OPENAI_ENDPOINT)
+    .replace(/\/+$/, "")
+    .replace(/\/v1$/, "");
   let upstream;
   try {
-    upstream = await fetch(TAVILY_ENDPOINT, {
+    upstream = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(tavilyBody),
+      body: JSON.stringify(requestBody),
     });
   } catch (error) {
     return jsonResponse(
-      { ok: false, error: `Tavily request failed: ${error?.message ?? String(error)}` },
+      {
+        ok: false,
+        error: `GPT web search failed: ${error?.message ?? String(error)}`,
+      },
       cors,
       502,
     );
   }
 
-  const body = await upstream.text();
-  return new Response(body, {
-    status: upstream.status,
-    headers: {
-      ...cors,
-      "Content-Type": upstream.headers.get("Content-Type") ?? "application/json; charset=utf-8",
+  if (!upstream.ok) {
+    return new Response(await upstream.text(), {
+      status: upstream.status,
+      headers: {
+        ...cors,
+        "Content-Type":
+          upstream.headers.get("Content-Type") ??
+          "application/json; charset=utf-8",
+      },
+    });
+  }
+
+  let payload;
+  try {
+    payload = await upstream.json();
+  } catch {
+    return jsonResponse(
+      { ok: false, error: "GPT web search returned invalid JSON." },
+      cors,
+      502,
+    );
+  }
+  try {
+    return jsonResponse(normalizeGptSearchResponse(payload), cors);
+  } catch (error) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: error?.message ?? "GPT web search returned invalid results.",
+      },
+      cors,
+      502,
+    );
+  }
+}
+
+export function buildGptSearchRequest(body, query, model = DEFAULT_MODEL) {
+  const requested = Number(body?.max_results);
+  const maxResults = Math.min(
+    Math.max(
+      Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : 6,
+      1,
+    ),
+    20,
+  );
+  const recencyScope = body?.topic === "news";
+  const datedScope = /\b(?:1[6-9]|20)\d{2}\b/.test(query);
+  const days = Math.min(Math.max(Number(body?.days) || 14, 1), 3650);
+  const scope = recencyScope
+    ? `Prefer sources published within the last ${days} days.`
+    : datedScope
+      ? "The query identifies a dated event. Search that exact period and prefer authoritative sources."
+      : "Search broadly across relevant time periods and prefer authoritative sources.";
+
+  return {
+    model: String(model || DEFAULT_MODEL),
+    tools: [{ type: "web_search" }],
+    tool_choice: "required",
+    max_tool_calls: 1,
+    max_output_tokens: 2048,
+    include: ["web_search_call.action.sources"],
+    store: false,
+    instructions:
+      "Search the web before answering. Return a JSON object with an answer and citable results. " +
+      "Use only URLs returned by web search and never invent a URL.",
+    input: `${query}\n\n${scope}`,
+    text: {
+      format: {
+        type: "json_schema",
+        name: "disaster_search_results",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            answer: { type: "string" },
+            results: {
+              type: "array",
+              maxItems: maxResults,
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  url: { type: "string" },
+                  content: { type: "string" },
+                  published_date: { type: "string" },
+                },
+                required: ["title", "url", "content", "published_date"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["answer", "results"],
+          additionalProperties: false,
+        },
+      },
     },
-  });
+  };
+}
+
+export function normalizeGptSearchResponse(payload) {
+  const output = Array.isArray(payload?.output) ? payload.output : [];
+  const text =
+    (typeof payload?.output_text === "string" && payload.output_text) ||
+    output
+      .flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
+      .filter(
+        (item) => item?.type === "output_text" && typeof item.text === "string",
+      )
+      .map((item) => item.text)
+      .join("\n");
+  if (!text) throw new Error("GPT web search returned no structured results.");
+
+  const parsed = JSON.parse(text);
+  const searchedUrls = new Set();
+  for (const item of output) {
+    const sources = Array.isArray(item?.action?.sources)
+      ? item.action.sources
+      : [];
+    for (const source of sources) {
+      if (isCitableHttpUrl(source?.url)) searchedUrls.add(source.url);
+    }
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const part of content) {
+      const annotations = Array.isArray(part?.annotations)
+        ? part.annotations
+        : [];
+      for (const annotation of annotations) {
+        if (isCitableHttpUrl(annotation?.url))
+          searchedUrls.add(annotation.url);
+      }
+    }
+  }
+
+  const results = (Array.isArray(parsed?.results) ? parsed.results : []).filter(
+    (item) => item && typeof item.url === "string" && searchedUrls.has(item.url),
+  );
+  return {
+    answer:
+      results.length > 0 && typeof parsed?.answer === "string"
+        ? parsed.answer
+        : "",
+    results,
+  };
+}
+
+function isCitableHttpUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname.length > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function corsHeaders(origin, allowedOrigins = "*") {
-  // `?? "*"` (not `|| "*"`): an explicitly empty ALLOWED_ORIGINS denies all
-  // origins rather than silently falling back to the wildcard.
   const allowed = String(allowedOrigins ?? "*")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  // Only emit Access-Control-Allow-Origin for a matched (or explicit "*")
-  // origin; for an unmatched origin omit it so the browser blocks the response.
   let allowOrigin;
   if (allowed.includes("*") || !origin) {
     allowOrigin = "*";

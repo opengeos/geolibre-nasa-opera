@@ -30,6 +30,7 @@ import {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // A 1x1 degree square around [0,0].
@@ -311,7 +312,7 @@ describe("news", () => {
     );
   });
 
-  it("searchNews normalizes Tavily results", async () => {
+  it("searchNews normalizes GPT web search results", async () => {
     const fetchImpl = vi.fn(
       async () =>
         new Response(
@@ -346,19 +347,102 @@ describe("news", () => {
     );
   });
 
-  it("uses Tavily only when explicitly selected", async () => {
+  it("drops a proxy answer when there are no citable results", async () => {
     const fetchImpl = vi.fn(async () =>
-      Response.json({ results: [] }),
+      Response.json({
+        answer: "Unsupported summary",
+        results: [{ title: "Invalid result", url: "not-a-url" }],
+      }),
     );
-    await searchNews("current floods", {
+
+    const out = await searchNews("historical disaster", {
       endpoint: "https://news.example.com",
-      engine: "tavily",
       fetchImpl: fetchImpl as never,
     });
+
+    expect(out.results).toEqual([]);
+    expect(out.answer).toBeUndefined();
+  });
+
+  it("uses the managed GeoLibre GPT messages route instead of /ai/search", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.model).toBe("gpt-5.6-luna");
+      expect(body.max_tokens).toBe(2048);
+      expect(body.tools).toContainEqual(
+        expect.objectContaining({
+          type: "web_search_20250305",
+          max_uses: 1,
+        }),
+      );
+      return Response.json({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              answer: "Flooding affected central Nepal.",
+              results: [
+                {
+                  title: "Official flood update",
+                  url: "https://example.gov.np/flood-update",
+                  content: "Flooding affected Rasuwa.",
+                  published_date: "2026-08-26",
+                },
+              ],
+            }),
+          },
+        ],
+      });
+    });
+
+    const out = await searchNews("Nepal floods August 2026", {
+      endpoint: "/ai",
+      topic: "general",
+      fetchImpl: fetchImpl as never,
+    });
+
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://news.example.com/tavily",
-      expect.any(Object),
+      "/ai/v1/messages",
+      expect.objectContaining({ method: "POST" }),
     );
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+    expect(out.results[0]?.publisher).toBe("example.gov.np");
+  });
+
+  it("allows enough time for GPT web search to complete", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+          setTimeout(
+            () =>
+              resolve(
+                Response.json({
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({ answer: "", results: [] }),
+                    },
+                  ],
+                }),
+              ),
+            20_000,
+          );
+        }),
+    );
+
+    const pending = searchNews("Nepal floods August 2026", {
+      endpoint: "https://geolibre.example.com/ai",
+      topic: "general",
+      fetchImpl: fetchImpl as never,
+    });
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await expect(pending).resolves.toMatchObject({ results: [] });
   });
 
   it("uses GPT native web search directly in a configured local build", async () => {
@@ -391,7 +475,7 @@ describe("news", () => {
       endpoint: "",
       topic: "news",
       gptApiKey: "local-test-key",
-      gptBaseUrl: "https://cli.example.com",
+      gptBaseUrl: "https://cli.example.com/v1",
       fetchImpl: fetchImpl as never,
     });
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -399,6 +483,45 @@ describe("news", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(out.results[0]?.sourceUrl).toBe("https://example.com/flood");
+  });
+
+  it("drops a direct GPT answer when there are no citable results", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              answer: "Unsupported summary",
+              results: [
+                {
+                  title: "Invalid result",
+                  url: 123,
+                  content: "Not a citable URL.",
+                  published_date: "2026-08-20",
+                },
+                {
+                  title: "Malformed result",
+                  url: "not-a-url",
+                  content: "Also not a citable URL.",
+                  published_date: "2026-08-20",
+                },
+              ],
+            }),
+          },
+        ],
+      }),
+    );
+
+    const out = await searchNews("historical disaster", {
+      endpoint: "",
+      gptApiKey: "local-test-key",
+      gptBaseUrl: "https://cli.example.com/v1",
+      fetchImpl: fetchImpl as never,
+    });
+
+    expect(out.results).toEqual([]);
+    expect(out.answer).toBeUndefined();
   });
 });
 

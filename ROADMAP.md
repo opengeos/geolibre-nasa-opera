@@ -43,7 +43,7 @@ Current version: **0.3.0**.
 - [x] `buildings_in_flood` — benchmark ∩ OSM building footprints (Overpass) for
       exposure counts and flooded footprint area.
 - [x] `news_impact_search` — cited impact figures (source URL + publisher + date)
-      via a Tavily-backed Cloudflare Worker. Defaults to a **retrospective**
+      via GPT web search through a Cloudflare Worker. Defaults to a **retrospective**
       `general` search so events older than a few days remain reachable; supports
       `topic: "news"` + a `days` window for fresh journalistic coverage.
 - [x] `build_one_pager` — self-contained, print/PDF-ready HTML one-pager: map

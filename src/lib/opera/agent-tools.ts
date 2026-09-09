@@ -16,9 +16,10 @@ import {
 export const OPERA_AGENT_SYSTEM_PROMPT = `NASA OPERA domain tools are available for searching and visualizing OPERA satellite products.
 
 Mandatory disaster-request routing:
-- For questions about disasters happening now, today, currently, recently, or in the latest news, call search_realtime_disasters before answering. It uses GPT's native web_search functionality. Cite returned source_url values and publication dates; never answer a real-time disaster question from memory alone.
-- A map/show/analyze request is never routed to search_realtime_disasters. Call map_disaster_event only; that composite tool performs its own bounded, sourced impact search and returns those results for the answer.
-- Do not use tavily_search unless the user explicitly asks for Tavily by name. Normal current-event and impact searches use GPT web search.
+- For factual questions about historical, current, or recent disasters, call search_disasters before answering when the conversation does not already contain adequate sourced search results for that event. It uses GPT's native web_search functionality. Cite returned source_url values and publication dates; never answer disaster facts from memory alone.
+- After search_disasters returns sources, reuse those results for follow-up questions about the same event. Do not call search_disasters again merely because the user says "tell me more" or asks for details already covered by those results. Search again only when the user explicitly asks for an update/latest information or requests facts the existing results do not cover.
+- For a request to zoom or navigate to the location of a named disaster, call search_disasters first unless adequate sourced results for the same event are already in the conversation, use the reports to identify an affected locality, and only then use the host navigation tool. A zoom or navigation request is not a map, show, or analyze request, so do not call map_disaster_event unless the user also asks to map or analyze the event. Never substitute the center of a country or region as an unverified representative location. Historical and explicitly dated events are searched without a short recency window.
+- A map/show/analyze request is never routed to search_disasters. Call map_disaster_event only; that composite tool performs its own bounded, sourced impact search and returns those results for the answer.
 - A request to map, show, or analyze a flood, earthquake, volcanic eruption, landslide, wildfire, or other disaster without named datasets MUST call map_disaster_event. The user only needs to provide a location and event date or date range; infer the standard data workflow and do not ask them to name OPERA, Sentinel-2, Overture, WorldPop, or individual tools. Navigating the map or adding a basemap is preparation, not completion.
 - When the user does not name data sources, map_disaster_event MUST use its deterministic authoritative defaults. These prioritize an observed hazard extent from a mission or government source, then corroborating change observations, Overture buildings and transportation, WorldPop modeled population, and attributable official reports or news. If the user explicitly names sources, use the relevant individual tools where available and clearly identify any named source the available tools cannot honor. Do not imply that map_disaster_event overrides its fixed defaults.
 - Do not call add_basemap for a disaster request unless the user explicitly asks for a basemap. map_disaster_event adds open-access pre/post Sentinel-2 imagery automatically; use sentinel2_event_imagery only for an explicit standalone imagery request.
@@ -468,11 +469,11 @@ const newsImpactSchema = z.object({
   max_results: z.number().int().min(1).max(20).optional(),
 });
 
-const realtimeDisasterSchema = z.object({
+const disasterSearchSchema = z.object({
   query: z
     .string()
     .describe(
-      "Current-disaster search query, including a region or hazard when relevant.",
+      "Disaster search query for a historical, current, or recent event, including its place and date when known.",
     ),
   days: z
     .number()
@@ -480,8 +481,16 @@ const realtimeDisasterSchema = z.object({
     .min(1)
     .max(365)
     .optional()
-    .describe("How many days of recent news to search (default 14)."),
+    .describe(
+      "How many days of recent sources to search (default 14). Used only when the query explicitly asks for current, latest, recent, or ongoing information.",
+    ),
   max_results: z.number().int().min(1).max(20).optional(),
+  refresh: z
+    .boolean()
+    .optional()
+    .describe(
+      "Bypass a recent identical-query cache. Use only when the user explicitly asks for refreshed or latest information.",
+    ),
 });
 
 const impactSchema = z.object({
@@ -548,9 +557,45 @@ const onePagerSchema = z.object({
 
 type TitilerCommonInput = z.infer<typeof titilerCommonSchema>;
 
+const FRESH_DISASTER_SEARCH_RE =
+  /\b(?:now|today|current|currently|latest|live|ongoing|recent|recently|this week|past \d+ days?)\b/i;
+const EXPLICIT_DISASTER_DATE_RE = /\b(?:1[6-9]|20)\d{2}\b/;
+const DISASTER_SEARCH_CACHE_MS = 5 * 60 * 1000;
+const DISASTER_SEARCH_CACHE_MAX_ENTRIES = 20;
+
+/** Return whether a disaster query explicitly requests fresh information. */
+function requestsFreshDisasterInformation(query: string): boolean {
+  if (EXPLICIT_DISASTER_DATE_RE.test(query)) return false;
+  return FRESH_DISASTER_SEARCH_RE.test(query);
+}
+
+/** Normalize a disaster query for short-lived duplicate-request caching. */
+function normalizeDisasterQuery(query: string): string {
+  return query.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Remove expired and oldest disaster search cache entries before insertion. */
+function pruneDisasterSearchCache(
+  cache: Map<string, { expiresAt: number; result: Promise<JSONValue> }>,
+  now: number,
+): void {
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) cache.delete(key);
+  }
+  while (cache.size >= DISASTER_SEARCH_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey !== "string") break;
+    cache.delete(oldestKey);
+  }
+}
+
 export function createOperaAgentTools(
   getControl: () => OperaControl | null,
 ): Tool[] {
+  const disasterSearchCache = new Map<
+    string,
+    { expiresAt: number; result: Promise<JSONValue> }
+  >();
   const controlOrThrow = (): OperaControl => {
     const control = getControl();
     if (!control) {
@@ -814,7 +859,7 @@ export function createOperaAgentTools(
     tool({
       name: "map_disaster_event",
       description:
-        "Run the deterministic authoritative disaster workflow from only hazard, place/AOI, and dates. It selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. For floods this automatically adds grouped pre/post OPERA DSWx-HLS, cloud-penetrating DSWx-S1, and Sentinel-2 imagery; derives their combined observed flood water; maps Overture buildings as 3D extrusions above raster layers with affected buildings highlighted red; maps affected roads; and calculates WorldPop exposure. Wildfires discover the matching NASA Earthdata GIS event and prefer FEDS perimeters, burn-severity products, and OPERA DIST. Every successful workflow downloads a locally openable, single-file interactive HTML assessment with an embedded GeoLibre map-only project and CARTO Voyager AOI overview. Use this whenever the user does not specify datasets or workflow steps.",
+        "Run the deterministic authoritative disaster workflow only when the user explicitly asks to map, show, or analyze a disaster. Never call this tool for a request that only asks to zoom, navigate, go to, locate, or identify the location of a disaster. For an explicit mapping or analysis request, it works from only hazard, place/AOI, and dates and selects mission or government hazard observations first, then corroborating change products, Overture buildings and transportation, WorldPop population, and attributable reports. For floods this automatically adds grouped pre/post OPERA DSWx-HLS, cloud-penetrating DSWx-S1, and Sentinel-2 imagery; derives their combined observed flood water; maps Overture buildings as 3D extrusions above raster layers with affected buildings highlighted red; maps affected roads; and calculates WorldPop exposure. Wildfires discover the matching NASA Earthdata GIS event and prefer FEDS perimeters, burn-severity products, and OPERA DIST. Every successful workflow downloads a locally openable, single-file interactive HTML assessment with an embedded GeoLibre map-only project and CARTO Voyager AOI overview.",
       inputSchema: disasterEventSchema,
       callback: async (input) =>
         toJsonValue(
@@ -928,48 +973,57 @@ export function createOperaAgentTools(
         ),
     }),
     tool({
-      name: "search_realtime_disasters",
+      name: "search_disasters",
       description:
-        "Search the live internet news index for disasters happening now or recently. Use this for current/latest disaster discovery before mapping an event. Returns citable source URLs, publishers, publication dates, and snippets.",
-      inputSchema: realtimeDisasterSchema,
-      callback: async (input) =>
-        toJsonValue(
-          await controlOrThrow().newsImpactSearchForAgent({
+        "Use GPT web search to find historical, current, recent, or explicitly dated disasters. Historical and dated queries have no short recency cutoff. Current/latest/recent queries use a recent-source window. Returns citable source URLs, publishers, publication dates, and snippets. This call can take several seconds, so reuse its result for follow-up questions about the same event instead of calling it again.",
+      inputSchema: disasterSearchSchema,
+      callback: async (input) => {
+        const fresh = requestsFreshDisasterInformation(input.query);
+        const maxResults = input.max_results;
+        const days = fresh ? (input.days ?? 14) : undefined;
+        const cacheKey = [
+          fresh ? "news" : "general",
+          days ?? "",
+          maxResults ?? "",
+          normalizeDisasterQuery(input.query),
+        ].join("|");
+        const cached = disasterSearchCache.get(cacheKey);
+        const now = Date.now();
+        if (!input.refresh && cached && cached.expiresAt > now) {
+          return cached.result;
+        }
+        const result = controlOrThrow()
+          .newsImpactSearchForAgent({
             query: input.query,
-            maxResults: input.max_results,
-            topic: "news",
-            days: input.days ?? 14,
-            engine: "gpt",
-          }),
-        ),
-    }),
-    tool({
-      name: "tavily_search",
-      description:
-        "Search with Tavily. Use ONLY when the user explicitly asks for Tavily by name; never use it for ordinary real-time disaster or impact searches.",
-      inputSchema: realtimeDisasterSchema,
-      callback: async (input) =>
-        toJsonValue(
-          await controlOrThrow().newsImpactSearchForAgent({
-            query: input.query,
-            maxResults: input.max_results,
-            topic: "news",
-            days: input.days ?? 14,
-            engine: "tavily",
-          }),
-        ),
+            maxResults,
+            topic: fresh ? "news" : "general",
+            ...(fresh ? { days } : {}),
+          })
+          .then(toJsonValue);
+        disasterSearchCache.delete(cacheKey);
+        pruneDisasterSearchCache(disasterSearchCache, now);
+        disasterSearchCache.set(cacheKey, {
+          expiresAt: now + DISASTER_SEARCH_CACHE_MS,
+          result,
+        });
+        void result.catch(() => {
+          if (disasterSearchCache.get(cacheKey)?.result === result) {
+            disasterSearchCache.delete(cacheKey);
+          }
+        });
+        return result;
+      },
     }),
     tool({
       name: "news_impact_search",
       description:
-        "Search reputable news for quantified financial/societal/public-safety impact figures. Returns results with source_url, publisher, and date so every figure is citable.",
+        "Use GPT web search to find reputable sources for quantified financial/societal/public-safety impact figures. Returns results with source_url, publisher, and date so every figure is citable.",
       inputSchema: newsImpactSchema,
       callback: async (input) =>
         toJsonValue(
           await controlOrThrow().newsImpactSearchForAgent({
             query: input.query,
             maxResults: input.max_results,
-            engine: "gpt",
           }),
         ),
     }),
