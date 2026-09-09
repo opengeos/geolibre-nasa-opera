@@ -1,0 +1,414 @@
+/* ==========================================================================
+   NASA OPERA for GeoLibre - theme extensions
+   Built on Zensical's own custom properties so both color schemes follow.
+   ========================================================================== */
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #0a7692;
+  --md-primary-fg-color--light: #3a9db5;
+  --md-primary-fg-color--dark: #075a70;
+  --md-accent-fg-color: #0e8ba9;
+  --md-accent-fg-color--transparent: rgba(14, 139, 169, 0.1);
+
+  --opera-panel: #f4f7f8;
+  --opera-line: #d0d9db;
+  --opera-line-strong: #b4c1c4;
+  --opera-faint: #7c919b;
+  --opera-wash: #dbebef;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 205;
+  --md-primary-fg-color: #0b2b36;
+  --md-primary-fg-color--light: #17495a;
+  --md-primary-fg-color--dark: #061c24;
+  --md-accent-fg-color: #4ec4e6;
+  --md-accent-fg-color--transparent: rgba(78, 196, 230, 0.1);
+
+  --opera-panel: #142a35;
+  --opera-line: #1d3542;
+  --opera-line-strong: #2b4a5a;
+  --opera-faint: #6d8592;
+  --opera-wash: #0f2f3c;
+}
+
+/* A little more room than the default 61rem, so the demo stills read. */
+.md-grid {
+  max-width: 70rem;
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-variation-settings: "wdth" 112;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+
+/* --------------------------------------------------------------------------
+   Hero
+   -------------------------------------------------------------------------- */
+
+.md-typeset .hero {
+  position: relative;
+  overflow: hidden;
+  margin: -1.2rem 0 2.4rem;
+  padding: 2.4rem 1.6rem 2rem;
+  background: var(--opera-panel);
+  border: 1px solid var(--opera-line);
+}
+
+.md-typeset .hero #opera-mosaic {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.5;
+  -webkit-mask-image: linear-gradient(
+    100deg,
+    transparent 0%,
+    transparent 42%,
+    rgba(0, 0, 0, 0.55) 68%,
+    rgba(0, 0, 0, 0.95) 100%
+  );
+  mask-image: linear-gradient(
+    100deg,
+    transparent 0%,
+    transparent 42%,
+    rgba(0, 0, 0, 0.55) 68%,
+    rgba(0, 0, 0, 0.95) 100%
+  );
+}
+
+.md-typeset .hero-inner {
+  position: relative;
+}
+
+.md-typeset .hero h1 {
+  font-size: clamp(2rem, 6vw, 3.2rem);
+  font-weight: 700;
+  line-height: 1.03;
+  letter-spacing: -0.028em;
+  margin: 0.4rem 0 0;
+  max-width: 15ch;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset .eyebrow {
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--opera-faint);
+  margin: 0;
+}
+
+.md-typeset .hero-lede {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--md-default-fg-color--light);
+  max-width: 52ch;
+  margin: 0.9rem 0 1.4rem;
+}
+
+.md-typeset .hero .md-button {
+  margin: 0 0.4rem 0.4rem 0;
+}
+
+.md-typeset .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 1.4rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--opera-line);
+  max-width: 44rem;
+}
+
+.md-typeset .chip {
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--opera-line);
+  padding: 0.2rem 0.4rem;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Video demos
+   -------------------------------------------------------------------------- */
+
+.md-typeset .demos {
+  display: grid;
+  gap: 2.4rem;
+  margin: 1.6rem 0 2.4rem;
+}
+
+.md-typeset .demo {
+  display: grid;
+  gap: 1rem;
+}
+
+@media screen and (min-width: 60em) {
+  .md-typeset .demo {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap: 1.6rem;
+    align-items: start;
+  }
+}
+
+.md-typeset .frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: var(--opera-panel);
+  border: 1px solid var(--opera-line-strong);
+}
+
+.md-typeset .frame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.md-typeset .facade {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  background: var(--opera-panel);
+}
+
+.md-typeset .facade img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.md-typeset .facade::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(6, 16, 22, 0) 45%,
+    rgba(6, 16, 22, 0.6) 100%
+  );
+}
+
+.md-typeset .facade .play {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 3.2rem;
+  height: 2.2rem;
+  display: grid;
+  place-items: center;
+  background: var(--md-accent-fg-color);
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.md-typeset .facade .play svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  display: block;
+  fill: var(--md-default-bg-color);
+}
+
+.md-typeset .facade:hover .play,
+.md-typeset .facade:focus-visible .play {
+  background: var(--md-primary-fg-color);
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.md-typeset .facade .cue {
+  position: absolute;
+  z-index: 1;
+  left: 0.6rem;
+  bottom: 0.5rem;
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #e9f4f7;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+.md-typeset .demo-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.md-typeset .demo-meta h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.md-typeset .demo-meta p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .stamp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.6rem !important;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--opera-faint) !important;
+}
+
+.md-typeset .stamp span::after {
+  content: " \00b7";
+  color: var(--opera-line-strong);
+}
+
+.md-typeset .stamp span:last-child::after {
+  content: "";
+}
+
+.md-typeset .prompt {
+  border-left: 2px solid var(--md-accent-fg-color);
+  background: var(--opera-wash);
+  padding: 0.6rem 0.8rem;
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.65rem;
+  line-height: 1.6;
+  color: var(--md-default-fg-color);
+  overflow-x: auto;
+}
+
+.md-typeset .prompt em {
+  display: block;
+  font-style: normal;
+  font-family: var(--md-text-font-family, sans-serif);
+  font-size: 0.55rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--md-primary-fg-color);
+  margin-bottom: 0.3rem;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .prompt em {
+  color: var(--md-accent-fg-color);
+}
+
+/* --------------------------------------------------------------------------
+   Data path
+   -------------------------------------------------------------------------- */
+
+.md-typeset .path {
+  display: grid;
+  gap: 0.7rem;
+  margin: 1.2rem 0 1.6rem;
+}
+
+@media screen and (min-width: 45em) {
+  .md-typeset .path {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.md-typeset .stage {
+  border: 1px solid var(--opera-line);
+  background: var(--opera-panel);
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.md-typeset .stage .num {
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--opera-faint);
+}
+
+.md-typeset .stage strong {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.md-typeset .stage p {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.55;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .stage .url {
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.6rem;
+  line-height: 1.5;
+  color: var(--opera-faint);
+  overflow-x: auto;
+  white-space: nowrap;
+  padding-top: 0.4rem;
+  margin-top: auto;
+  border-top: 1px dashed var(--opera-line-strong);
+}
+
+/* --------------------------------------------------------------------------
+   Inline label used as definition-list terms
+   -------------------------------------------------------------------------- */
+
+.md-typeset code.tag {
+  background: transparent;
+  padding: 0;
+  color: var(--md-default-fg-color);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  box-shadow: none;
+}
+
+/* --------------------------------------------------------------------------
+   Reduced motion
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .md-typeset .facade .play {
+    transition: none;
+  }
+  .md-typeset .facade:hover .play,
+  .md-typeset .facade:focus-visible .play {
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Primary button: the slate scheme's primary color is the dark header navy,
+   which would leave the button unreadable, so use the accent there instead.
+   -------------------------------------------------------------------------- */
+
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  background-color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+  color: #062029;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:hover,
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:focus {
+  background-color: var(--md-accent-fg-color--light, #7dd6ee);
+  border-color: var(--md-accent-fg-color--light, #7dd6ee);
+  color: #062029;
+}

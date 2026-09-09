@@ -235,9 +235,11 @@ Map the flood in Valencia Region, Spain from 2024-10-27 to 2024-11-05.
 This is a browser-side agent: provider SDKs run in the browser and send prompts
 directly to the selected model provider. Use it in trusted local or internal
 GeoLibre deployments, or place a backend proxy in front of provider credentials
-for production. JavaScript execution is available for local MapLibre tasks;
-destructive layer-removal tools start disabled and can be enabled in the
-GeoAgent permission toggles.
+for production. The plugin embeds GeoAgent with both JavaScript execution and
+destructive layer-removal tools enabled by default and the permission toggles
+hidden (`allowCodeExecutionDefault`, `allowDestructiveToolsDefault`, and
+`showPermissionToggles: false` in `src/geolibre.ts`), so the agent can remove
+layers and run JavaScript against the live map without a further prompt.
 
 ### Bundling the LLM API key (optional)
 

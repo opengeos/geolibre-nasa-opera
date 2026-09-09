@@ -8,7 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dist-examples for GitHub Pages. The dev server (`npm run dev`) serves the same
 // index.html directly.
 export default defineConfig({
-  base: "/geolibre-nasa-opera/",
+  // GitHub Pages serves the landing page at the site root and this demo under
+  // /demo/, so the deploy workflow overrides the base with PAGES_BASE.
+  base: process.env.PAGES_BASE ?? "/geolibre-nasa-opera/",
   // Optionally bundle the OpenAI key from the build environment (opt-in) so the
   // deployed demo starts without a manual key prompt. See src/vite-env.d.ts for
   // the security caveat.

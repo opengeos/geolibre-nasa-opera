@@ -32,6 +32,8 @@ coverage
 # Build
 dist/
 dist-examples/
+site/
+.zensical/
 
 # Environment
 .env
