@@ -687,6 +687,19 @@ describe("disaster impact control", () => {
       displayName: "Valencia Region, Spain",
     }));
     const control = new OperaControl({ addLayerGroup, geocodePlace });
+    vi.spyOn(control, "newsImpactSearchForAgent").mockResolvedValue({
+      ok: true,
+      status: "Found cited impacts.",
+      results: [
+        {
+          title: "Valencia flood death toll reaches 224",
+          sourceUrl: "https://example.com/valencia-flood-impact",
+          publisher: "example.com",
+          date: "2024-11-12",
+          snippet: "224 confirmed fatalities",
+        },
+      ],
+    });
     vi.spyOn(control, "searchForAgent").mockResolvedValue({
       ok: true,
       status: "Found pre-event OPERA.",
@@ -827,6 +840,15 @@ describe("disaster impact control", () => {
     });
     expect(control.buildOnePagerForAgent).toHaveBeenCalledWith({
       narrative: expect.stringContaining("cloud-penetrating DSWx-S1"),
+      impacts: [
+        {
+          claim: "Valencia flood death toll reaches 224",
+          value: "224 confirmed fatalities",
+          sourceUrl: "https://example.com/valencia-flood-impact",
+          publisher: "example.com",
+          date: "2024-11-12",
+        },
+      ],
       buildings: {
         floodedCount: 2,
         total: 10,

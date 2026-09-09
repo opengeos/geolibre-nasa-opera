@@ -52,6 +52,10 @@ describe("GPT news proxy Worker", () => {
     );
     expect(request.input).toContain("Search that exact period");
     expect(request.text.format.schema.properties.results.maxItems).toBe(8);
+    expect(
+      request.text.format.schema.properties.results.items.required,
+    ).toEqual(expect.arrayContaining(["claim", "value"]));
+    expect(request.instructions).toContain("short impact category");
   });
 
   it("uses a broad authoritative scope for an undated general query", () => {

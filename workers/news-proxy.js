@@ -188,6 +188,8 @@ export function buildGptSearchRequest(body, query, model = DEFAULT_MODEL) {
     store: false,
     instructions:
       "Search the web before answering. Return a JSON object with an answer and citable results. " +
+      "For impact queries, make claim a short impact category and value one concise quantified impact supported by that URL. " +
+      "For other queries, use a concise sourced fact for claim and value. " +
       "Use only URLs returned by web search and never invent a URL.",
     input: `${query}\n\n${scope}`,
     text: {
@@ -209,8 +211,17 @@ export function buildGptSearchRequest(body, query, model = DEFAULT_MODEL) {
                   url: { type: "string" },
                   content: { type: "string" },
                   published_date: { type: "string" },
+                  claim: { type: "string" },
+                  value: { type: "string" },
                 },
-                required: ["title", "url", "content", "published_date"],
+                required: [
+                  "title",
+                  "url",
+                  "content",
+                  "published_date",
+                  "claim",
+                  "value",
+                ],
                 additionalProperties: false,
               },
             },
