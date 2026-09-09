@@ -629,6 +629,20 @@ export interface OperaAgentOnePagerResult {
   html?: string;
 }
 
+/** Convert grounded search results into concise, linked one-pager cards. */
+function citedImpactsFromNews(results: NewsResult[]): OnePagerImpact[] {
+  return results
+    .map((result) => ({
+      claim: result.claim?.trim() || result.title.trim(),
+      value: result.value?.trim() || result.snippet.trim(),
+      sourceUrl: result.sourceUrl,
+      publisher: result.publisher,
+      date: result.date,
+    }))
+    .filter((impact) => impact.claim.length > 0 && impact.value.length > 0)
+    .slice(0, 4);
+}
+
 const PANEL_CLASS = "plugin-control-panel opera-panel";
 
 /** Message returned by benchmark-gated agent tools when none is locked. */
@@ -2693,10 +2707,13 @@ export class OperaControl implements IControl {
     this._options.fitBounds?.(bbox);
     const sources = defaultAuthoritativeSources(hazard);
     const news = await this.newsImpactSearchForAgent({
-      query: `${eventName} ${event.start} ${event.end} official impacts`,
+      query:
+        `${eventName} ${event.start} ${event.end} official quantified impacts ` +
+        "fatalities injuries displaced damage economic loss infrastructure",
       maxResults: 6,
     });
     if (!news.ok) warnings.push(news.status);
+    const citedImpacts = news.ok ? citedImpactsFromNews(news.results) : [];
 
     const addSentinelPair = async (imageryBBox: BBox = bbox): Promise<{
       preEvent: OperaAgentSentinel2Result;
@@ -2861,6 +2878,7 @@ export class OperaControl implements IControl {
                 source: overture.transportation.source,
               }
             : undefined,
+          impacts: citedImpacts,
           sources: sourceLinks,
           generatedAt: new Date().toISOString().slice(0, 10),
           credit: "NASA Earthdata GIS · NASA OPERA · GeoLibre",
@@ -2984,6 +3002,7 @@ export class OperaControl implements IControl {
           `${eventName} was assessed for ${event.start} through ${event.end}. ` +
           "This open-data assessment combines NASA OPERA DSWx-HLS optical surface-water observations with cloud-penetrating DSWx-S1 radar observations, pre- and post-event Sentinel-2 imagery, Overture Maps buildings and transportation, and WorldPop population context. " +
           "Mapped exposure reflects intersection with OPERA-observed water and is not a field-validated damage estimate.",
+        impacts: citedImpacts,
         buildings: overture.ok
           ? {
               floodedCount: overture.buildings.floodedCount,

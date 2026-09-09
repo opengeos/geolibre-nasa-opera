@@ -324,6 +324,8 @@ describe("news", () => {
                 url: "https://www.reuters.com/world/x",
                 content: "224 people died",
                 published_date: "2024-11-01",
+                claim: "Confirmed fatalities",
+                value: "224 people",
               },
               { title: "no url" },
             ],
@@ -337,6 +339,8 @@ describe("news", () => {
     });
     expect(out.results).toHaveLength(1);
     expect(out.results[0]).toMatchObject({
+      claim: "Confirmed fatalities",
+      value: "224 people",
       publisher: "reuters.com",
       sourceUrl: "https://www.reuters.com/world/x",
     });
@@ -387,6 +391,8 @@ describe("news", () => {
                   url: "https://example.gov.np/flood-update",
                   content: "Flooding affected Rasuwa.",
                   published_date: "2026-08-26",
+                  claim: "Affected area",
+                  value: "Rasuwa District",
                 },
               ],
             }),
@@ -408,6 +414,10 @@ describe("news", () => {
     const [, init] = fetchImpl.mock.calls[0];
     expect(new Headers(init.headers).has("Authorization")).toBe(false);
     expect(out.results[0]?.publisher).toBe("example.gov.np");
+    expect(out.results[0]).toMatchObject({
+      claim: "Affected area",
+      value: "Rasuwa District",
+    });
   });
 
   it("allows enough time for GPT web search to complete", async () => {

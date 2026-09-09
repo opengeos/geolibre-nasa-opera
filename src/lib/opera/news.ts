@@ -59,6 +59,10 @@ function readBuildEnv(): string | undefined {
 /** A normalized, citable news result. */
 export interface NewsResult {
   title: string;
+  /** Short impact category or sourced fact label. */
+  claim?: string;
+  /** Concise quantified impact or sourced fact. */
+  value?: string;
   /** Canonical article URL (what the agent must cite). */
   sourceUrl: string;
   /** Publisher/host derived from the URL, e.g. "reuters.com". */
@@ -91,6 +95,8 @@ interface WebSearchResult {
   url?: string;
   content?: string;
   published_date?: string;
+  claim?: string;
+  value?: string;
 }
 interface WebSearchResponse {
   results?: WebSearchResult[];
@@ -221,6 +227,8 @@ export async function searchNews(
       )
       .map((r) => ({
         title: r.title ?? "",
+        claim: r.claim,
+        value: r.value,
         sourceUrl: r.url,
         publisher: publisherFromUrl(r.url),
         date: r.published_date,
@@ -275,7 +283,9 @@ async function searchWithGptMessages(
         ],
         system:
           "Use web_search and return one JSON object only with schema " +
-          '{"answer":string,"results":[{"title":string,"url":string,"content":string,"published_date":string}]}. ' +
+          '{"answer":string,"results":[{"title":string,"url":string,"content":string,"published_date":string,"claim":string,"value":string}]}. ' +
+          "For impact queries, make claim a short impact category and value one concise quantified impact supported by that URL. " +
+          "For other queries, use a concise sourced fact for claim and value. " +
           `Return at most ${maxResults} citable results and never invent URLs.`,
         messages: [{ role: "user", content: `${query}${recency}` }],
       }),
@@ -304,6 +314,8 @@ async function searchWithGptMessages(
     .slice(0, maxResults)
     .map((item) => ({
       title: item.title ?? "",
+      claim: item.claim,
+      value: item.value,
       sourceUrl: item.url,
       publisher: publisherFromUrl(item.url),
       date: item.published_date,
