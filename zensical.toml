@@ -9,6 +9,8 @@ with titiler-cmr, and turns a place and a date range into a flood impact \
 one-pager."""
 site_author = "Qiusheng Wu"
 site_url = "https://opera-plugin.geolibre.app/"
+repo_url = "https://github.com/opengeos/geolibre-nasa-opera"
+repo_name = "opengeos/geolibre-nasa-opera"
 docs_dir = "docs"
 site_dir = "site"
 copyright = """
