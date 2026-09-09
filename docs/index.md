@@ -156,7 +156,7 @@ flood mapping, land disturbance, and the plugin running inside GeoLibre.
     screenshots, and calls the OPERA-specific tools registered by this plugin.
 
 `REPORT`{ .tag }
-:   A self-contained, print and PDF ready
+:   A self-contained, print- and PDF-ready
     [one-pager](flood-workflow.md) with the map snapshot, flood benchmark,
     building and transportation exposure, WorldPop population exposure, cited
     impact figures, and a generated background narrative.

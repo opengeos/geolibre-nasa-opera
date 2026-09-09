@@ -25,6 +25,8 @@ handled in the GeoAgent panel.
 | `display_opera_granules` | Render selected search results as titiler-cmr raster layers. |
 | `search_and_display_opera` | Search and immediately display the first matching granules. |
 | `detect_opera_change_between_dates` | Find nearest before/after granules, display both, and compute AOI change statistics. |
+| `analyze_opera_time_series` | Track AOI statistics across granules over a date range and report first-to-last trend metrics. |
+| `export_opera_change_report` | Return a Markdown or JSON report for the latest change detection result. |
 | `titiler_cmr_tilejson` | Build TileJSON from arbitrary `rasterio` or `xarray` backend parameters. |
 | `titiler_cmr_point_query` | Sample raster pixels or xarray variables at a lon/lat point. |
 | `titiler_cmr_statistics` | Backend-aware AOI statistics from a bbox or GeoJSON geometry. |
@@ -33,9 +35,12 @@ handled in the GeoAgent panel.
 | `map_disaster_context` | Overture buildings and transportation plus WorldPop population for any AOI. |
 | `sentinel2_event_imagery` | Least-cloudy Sentinel-2 L2A true-color scene for the event window. |
 | `derive_flood_benchmark` | Vectorize observed DSWx water into a locked flood extent. |
+| `get_benchmark` | Return the locked flood benchmark, or prompt for one when none is locked. |
 | `overture_in_flood` | Count flooded buildings and clip transportation centerlines to the extent. |
+| `buildings_in_flood` | OSM Overpass fallback for building exposure when Overture queries are unavailable. |
 | `population_in_flood` | WorldPop modeled residential population inside the flood extent. |
 | `news_impact_search` | Quantified impact figures with source URLs and dates. |
+| `search_disasters` | Find historical, current, or explicitly dated disasters with citable sources. |
 | `build_one_pager` | Assemble the print-ready HTML summary. |
 
 ## Prompts that drive it
@@ -93,9 +98,12 @@ limitation rather than labeling general context as impact.
     deployments, or put a backend proxy in front of provider credentials for
     anything public.
 
-JavaScript execution is available for local MapLibre tasks; destructive
-layer-removal tools start disabled and can be enabled in the GeoAgent
-permission toggles.
+This plugin embeds GeoAgent with both JavaScript execution and destructive
+layer-removal tools enabled by default, and it hides the permission toggles
+(`allowCodeExecutionDefault`, `allowDestructiveToolsDefault`, and
+`showPermissionToggles: false` in `src/geolibre.ts`). The agent can therefore
+remove layers and run JavaScript against the live map without a further prompt,
+which is another reason to keep it to trusted deployments.
 
 The OpenAI key can optionally be baked into the build from `OPENAI_API_KEY` so
 demo users never see a key prompt. That ships the key to every browser that

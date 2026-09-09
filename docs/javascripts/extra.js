@@ -29,8 +29,18 @@ function setupPlayers() {
   });
 }
 
+/* Listeners belonging to the mosaic currently on the page. Instant navigation
+   swaps in a fresh canvas, so the previous one's listeners are torn down here
+   rather than left holding a detached element. */
+var mosaicCleanup = null;
+
 /* Hero backdrop: a coarse DSWx-style water classification mosaic. */
 function drawMosaic() {
+  if (mosaicCleanup) {
+    mosaicCleanup();
+    mosaicCleanup = null;
+  }
+
   var canvas = document.getElementById("opera-mosaic");
   if (!canvas || !canvas.getContext) return;
   var ctx = canvas.getContext("2d");
@@ -95,17 +105,23 @@ function drawMosaic() {
 
   draw();
 
-  if (!canvas.dataset.wired) {
-    canvas.dataset.wired = "1";
-    var timer;
-    window.addEventListener("resize", function () {
-      clearTimeout(timer);
-      timer = setTimeout(draw, 180);
-    });
-    // Repaint when the reader flips the palette toggle.
-    new MutationObserver(draw).observe(document.body, {
-      attributes: true,
-      attributeFilter: ["data-md-color-scheme"],
-    });
-  }
+  var timer;
+  var onResize = function () {
+    clearTimeout(timer);
+    timer = setTimeout(draw, 180);
+  };
+  window.addEventListener("resize", onResize);
+
+  // Repaint when the reader flips the palette toggle.
+  var observer = new MutationObserver(draw);
+  observer.observe(document.body, {
+    attributes: true,
+    attributeFilter: ["data-md-color-scheme"],
+  });
+
+  mosaicCleanup = function () {
+    clearTimeout(timer);
+    window.removeEventListener("resize", onResize);
+    observer.disconnect();
+  };
 }

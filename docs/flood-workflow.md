@@ -12,7 +12,7 @@ one-pager.
 
 Order matters here: the extent gates everything after it.
 
-1.  ### Fix the flood extent
+1.  **Fix the flood extent**
 
     Either let `derive_flood_benchmark` search DSWx-HLS for the AOI and dates
     and vectorize the observed open and partial water, or import a human-QAed
@@ -21,7 +21,7 @@ Order matters here: the extent gates everything after it.
     with the project; the derived one is labeled OPERA-observed, not QAed. A
     sample placeholder lives at `examples/sample-benchmark-valencia.geojson`.
 
-2.  ### Measure exposure against it
+2.  **Measure exposure against it**
 
     With a benchmark locked, the agent is constrained to it. `overture_in_flood`
     counts flooded buildings through GeoLibre's bounded Overture PMTiles query,
@@ -33,7 +33,7 @@ Order matters here: the extent gates everything after it.
     window. `buildings_in_flood` remains an OSM Overpass fallback for hosts
     without Overture queries.
 
-3.  ### Publish the one-pager
+3.  **Publish the one-pager**
 
     `build_one_pager` assembles the map snapshot with the DSWx layer, flooded
     buildings and benchmark outline, a legend and scale bar, building and road
