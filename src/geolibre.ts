@@ -604,7 +604,7 @@ function isNasaOperaProjectState(
 export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
-  version: "0.3.0",
+  version: "0.3.1",
   restoresPanelCollapseState: true,
   activate(app) {
     if (!mountOpera(app)) return false;
