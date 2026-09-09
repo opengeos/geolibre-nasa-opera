@@ -81,6 +81,23 @@ describe("GPT news proxy Worker", () => {
     );
   });
 
+  it("returns a structured 502 for a non-JSON upstream success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not json", { status: 200 })),
+    );
+
+    const response = await handleRequest(searchRequest(), ENV);
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(body).toMatchObject({
+      ok: false,
+      error: "GPT web search returned invalid JSON.",
+    });
+  });
+
   it("keeps only results grounded in returned web-search sources", () => {
     const payload = {
       output: [

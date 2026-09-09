@@ -136,7 +136,16 @@ export async function handleRequest(request, env = {}) {
     });
   }
 
-  const payload = await upstream.json();
+  let payload;
+  try {
+    payload = await upstream.json();
+  } catch {
+    return jsonResponse(
+      { ok: false, error: "GPT web search returned invalid JSON." },
+      cors,
+      502,
+    );
+  }
   try {
     return jsonResponse(normalizeGptSearchResponse(payload), cors);
   } catch (error) {
