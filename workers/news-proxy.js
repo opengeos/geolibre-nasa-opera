@@ -243,7 +243,7 @@ export function normalizeGptSearchResponse(payload) {
       ? item.action.sources
       : [];
     for (const source of sources) {
-      if (typeof source?.url === "string") searchedUrls.add(source.url);
+      if (isCitableHttpUrl(source?.url)) searchedUrls.add(source.url);
     }
     const content = Array.isArray(item?.content) ? item.content : [];
     for (const part of content) {
@@ -251,7 +251,7 @@ export function normalizeGptSearchResponse(payload) {
         ? part.annotations
         : [];
       for (const annotation of annotations) {
-        if (typeof annotation?.url === "string")
+        if (isCitableHttpUrl(annotation?.url))
           searchedUrls.add(annotation.url);
       }
     }
@@ -267,6 +267,19 @@ export function normalizeGptSearchResponse(payload) {
         : "",
     results,
   };
+}
+
+function isCitableHttpUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname.length > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function corsHeaders(origin, allowedOrigins = "*") {

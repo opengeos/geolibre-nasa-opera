@@ -152,6 +152,33 @@ describe("GPT news proxy Worker", () => {
     });
   });
 
+  it("rejects malformed URLs even when listed as web-search sources", () => {
+    const payload = {
+      output: [
+        {
+          type: "web_search_call",
+          action: { sources: [{ url: "not-a-url" }] },
+        },
+      ],
+      output_text: JSON.stringify({
+        answer: "Unsupported summary.",
+        results: [
+          {
+            title: "Invalid result",
+            url: "not-a-url",
+            content: "Not citable.",
+            published_date: "2026-08-20",
+          },
+        ],
+      }),
+    };
+
+    expect(normalizeGptSearchResponse(payload)).toEqual({
+      answer: "",
+      results: [],
+    });
+  });
+
   it("rejects unknown paths", async () => {
     const response = await handleRequest(searchRequest("/other"), ENV);
     const body = await response.json();

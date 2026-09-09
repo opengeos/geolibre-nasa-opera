@@ -349,7 +349,10 @@ describe("news", () => {
 
   it("drops a proxy answer when there are no citable results", async () => {
     const fetchImpl = vi.fn(async () =>
-      Response.json({ answer: "Unsupported summary", results: [] }),
+      Response.json({
+        answer: "Unsupported summary",
+        results: [{ title: "Invalid result", url: "not-a-url" }],
+      }),
     );
 
     const out = await searchNews("historical disaster", {
@@ -495,6 +498,12 @@ describe("news", () => {
                   title: "Invalid result",
                   url: 123,
                   content: "Not a citable URL.",
+                  published_date: "2026-08-20",
+                },
+                {
+                  title: "Malformed result",
+                  url: "not-a-url",
+                  content: "Also not a citable URL.",
                   published_date: "2026-08-20",
                 },
               ],

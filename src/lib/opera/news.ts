@@ -109,6 +109,20 @@ function publisherFromUrl(url: string): string {
   }
 }
 
+/** Return whether a value is a citable absolute HTTP(S) URL. */
+function isCitableHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname.length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 function gptMessagesEndpoint(baseUrl: string): string {
   const normalized = baseUrl.replace(/\/+$/, "");
   return normalized.endsWith("/v1")
@@ -202,9 +216,8 @@ export async function searchNews(
     }
     const data = (await response.json()) as WebSearchResponse;
     const results: NewsResult[] = (data.results ?? [])
-      .filter(
-        (r): r is WebSearchResult & { url: string } =>
-          typeof r.url === "string",
+      .filter((r): r is WebSearchResult & { url: string } =>
+        isCitableHttpUrl(r.url),
       )
       .map((r) => ({
         title: r.title ?? "",
@@ -286,7 +299,7 @@ async function searchWithGptMessages(
   const data = JSON.parse(text.slice(start, end + 1)) as WebSearchResponse;
   const results = (data.results ?? [])
     .filter((item): item is WebSearchResult & { url: string } =>
-      typeof item.url === "string" && item.url.length > 0,
+      isCitableHttpUrl(item.url),
     )
     .slice(0, maxResults)
     .map((item) => ({
