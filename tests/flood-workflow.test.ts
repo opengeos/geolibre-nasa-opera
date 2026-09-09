@@ -490,7 +490,14 @@ describe("news", () => {
             type: "text",
             text: JSON.stringify({
               answer: "Unsupported summary",
-              results: [],
+              results: [
+                {
+                  title: "Invalid result",
+                  url: 123,
+                  content: "Not a citable URL.",
+                  published_date: "2026-08-20",
+                },
+              ],
             }),
           },
         ],

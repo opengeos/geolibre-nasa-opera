@@ -286,7 +286,7 @@ async function searchWithGptMessages(
   const data = JSON.parse(text.slice(start, end + 1)) as WebSearchResponse;
   const results = (data.results ?? [])
     .filter((item): item is WebSearchResult & { url: string } =>
-      Boolean(item.url),
+      typeof item.url === "string" && item.url.length > 0,
     )
     .slice(0, maxResults)
     .map((item) => ({
