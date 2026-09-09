@@ -212,7 +212,7 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   for (const group of reportProject?.layerGroups ?? []) {
     const name = String(group.name ?? "");
     if (/^Pre-event OPERA\b/i.test(name) || /Sentinel-2/i.test(name)) {
-      group.visible = false;
+      group.visible = true;
       if (typeof group.id === "string") hiddenReportGroupIds.add(group.id);
     }
   }
@@ -261,7 +261,7 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
          }</div>
        </div>`
     : "";
-  const impacts = input.impacts ?? [];
+  const impacts = (input.impacts ?? []).slice(0, 3);
   const impactsBlock = impacts.length
     ? `<div class="impacts">${impacts.map(impactCard).join("")}</div>`
     : `<p class="muted">No cited impacts supplied.</p>`;

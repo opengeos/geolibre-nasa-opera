@@ -578,12 +578,29 @@ describe("one-pager", () => {
           publisher: "reuters.com",
           date: "2024-11-01",
         },
+        {
+          claim: "Affected residents",
+          value: "845,000",
+          sourceUrl: "https://example.com/affected",
+        },
+        {
+          claim: "Direct damage",
+          value: "€18.08 billion",
+          sourceUrl: "https://example.com/damage",
+        },
+        {
+          claim: "Fourth impact",
+          value: "Must be omitted",
+          sourceUrl: "https://example.com/fourth",
+        },
       ],
       generatedAt: "2026-07-11",
     });
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("Valencia DANA");
     expect(html).toContain("https://www.reuters.com/x");
+    expect(html).toContain("https://example.com/damage");
+    expect(html).not.toContain("https://example.com/fourth");
     expect(html).toContain("1,200"); // building count formatted
     expect(html).toContain("125,000");
     expect(html).toContain("32.4 km");
@@ -682,7 +699,7 @@ describe("one-pager", () => {
       embeddedProject.layerGroups.find(
         (group: { id: string }) => group.id === "pre-opera",
       )?.visible,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       embeddedProject.layers.find(
         (layer: { id: string }) => layer.id === "opera-pre",

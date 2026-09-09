@@ -640,7 +640,7 @@ function citedImpactsFromNews(results: NewsResult[]): OnePagerImpact[] {
       date: result.date,
     }))
     .filter((impact) => impact.claim.length > 0 && impact.value.length > 0)
-    .slice(0, 4);
+    .slice(0, 3);
 }
 
 const PANEL_CLASS = "plugin-control-panel opera-panel";
