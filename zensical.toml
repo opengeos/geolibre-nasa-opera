@@ -29,6 +29,8 @@ extra_javascript = ["javascripts/extra.js"]
 
 [project.theme]
 language = "en"
+logo = "assets/geolibre-icon.png"
+favicon = "assets/favicon.png"
 features = [
   "content.code.copy",
   "content.tooltips",
@@ -47,7 +49,6 @@ text = "Archivo"
 code = "IBM Plex Mono"
 
 [project.theme.icon]
-logo = "lucide/satellite"
 repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]
