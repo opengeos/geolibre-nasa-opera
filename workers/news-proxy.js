@@ -252,7 +252,10 @@ export function normalizeGptSearchResponse(payload) {
     (item) => item && typeof item.url === "string" && searchedUrls.has(item.url),
   );
   return {
-    answer: typeof parsed?.answer === "string" ? parsed.answer : "",
+    answer:
+      results.length > 0 && typeof parsed?.answer === "string"
+        ? parsed.answer
+        : "",
     results,
   };
 }

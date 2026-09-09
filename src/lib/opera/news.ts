@@ -213,7 +213,11 @@ export async function searchNews(
         date: r.published_date,
         snippet: r.content ?? "",
       }));
-    return { results, answer: data.answer, endpoint };
+    return {
+      results,
+      answer: results.length > 0 ? data.answer : undefined,
+      endpoint,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -292,5 +296,9 @@ async function searchWithGptMessages(
       date: item.published_date,
       snippet: item.content ?? "",
     }));
-  return { results, answer: data.answer, endpoint };
+  return {
+    results,
+    answer: results.length > 0 ? data.answer : undefined,
+    endpoint,
+  };
 }

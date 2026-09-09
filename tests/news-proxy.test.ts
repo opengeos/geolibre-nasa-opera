@@ -129,7 +129,10 @@ describe("GPT news proxy Worker", () => {
       }),
     };
 
-    expect(normalizeGptSearchResponse(payload).results).toHaveLength(0);
+    expect(normalizeGptSearchResponse(payload)).toEqual({
+      answer: "",
+      results: [],
+    });
   });
 
   it("rejects unknown paths", async () => {

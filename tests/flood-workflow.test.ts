@@ -347,6 +347,20 @@ describe("news", () => {
     );
   });
 
+  it("drops a proxy answer when there are no citable results", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ answer: "Unsupported summary", results: [] }),
+    );
+
+    const out = await searchNews("historical disaster", {
+      endpoint: "https://news.example.com",
+      fetchImpl: fetchImpl as never,
+    });
+
+    expect(out.results).toEqual([]);
+    expect(out.answer).toBeUndefined();
+  });
+
   it("uses the managed GeoLibre GPT messages route instead of /ai/search", async () => {
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body));
@@ -466,6 +480,32 @@ describe("news", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(out.results[0]?.sourceUrl).toBe("https://example.com/flood");
+  });
+
+  it("drops a direct GPT answer when there are no citable results", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              answer: "Unsupported summary",
+              results: [],
+            }),
+          },
+        ],
+      }),
+    );
+
+    const out = await searchNews("historical disaster", {
+      endpoint: "",
+      gptApiKey: "local-test-key",
+      gptBaseUrl: "https://cli.example.com/v1",
+      fetchImpl: fetchImpl as never,
+    });
+
+    expect(out.results).toEqual([]);
+    expect(out.answer).toBeUndefined();
   });
 });
 
