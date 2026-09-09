@@ -5,8 +5,8 @@
 site_name = "OPERA Plugin for GeoLibre"
 site_description = """
 A GeoLibre plugin that searches NASA OPERA products through CMR, renders them \
-with titiler-cmr, and turns a place and a date range into a flood impact \
-one-pager."""
+with titiler-cmr, and turns a hazard, a place, and a date range into a disaster \
+impact assessment."""
 site_author = "Qiusheng Wu"
 site_url = "https://opera-plugin.geolibre.app/"
 repo_url = "https://github.com/opengeos/geolibre-nasa-opera"
@@ -22,7 +22,7 @@ nav = [
   { "Overview" = "index.md" },
   { "Products" = "products.md" },
   { "GeoAgent" = "geoagent.md" },
-  { "Flood workflow" = "flood-workflow.md" },
+  { "Disaster workflows" = "disaster-workflow.md" },
   { "Install" = "install.md" },
 ]
 

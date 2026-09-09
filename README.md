@@ -283,7 +283,7 @@ Open `http://localhost:5173`. After changing this plugin, rerun the install
 command and restart GeoLibre so Vite rediscovers the rebuilt drop-in bundle.
 `CLI_PROXY_UPSTREAM` can override the default `https://cli-proxy.opengeos.org`.
 
-## Disaster impact mapping and flood one-pager
+## Disaster impact mapping and event one-pagers
 
 For a location and event date or date range, `map_disaster_event` runs the
 standard workflow without requiring the user to name datasets or analysis

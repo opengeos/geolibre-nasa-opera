@@ -24,6 +24,12 @@ rendering keeps open and partial surface water visible while cloud, ocean, and
 no-data go transparent, so stacked post-event scenes do not bury the map under
 grey.
 
+Each family carries a different hazard: DSWx observes surface water for floods
+and storm flooding, DIST-ALERT and DIST-ANN carry vegetation and land
+disturbance for fires and post-event damage, and the SAR products, RTC-S1 and
+CSLC-S1, carry backscatter and the phase data behind displacement. The
+[disaster workflows](disaster-workflow.md) page maps hazards to sources.
+
 !!! tip "Continuous bands need a stretch"
 
     Bands like `B10_DEM` render flat without one. Set a rescale of, say,

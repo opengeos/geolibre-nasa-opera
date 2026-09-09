@@ -69,15 +69,21 @@ histogram for the displayed DSWx B01_WTR layer over the current AOI.
 Map the flood in Valencia Region, Spain from 2024-10-27 to 2024-11-05.
 ```
 
+```text
+Map the Colorado Fires in July 2026.
+```
+
 ## Hazard-specific source policy
 
-When the user does not name sources, `map_disaster_event` applies a
-deterministic policy per hazard.
+When the request does not name sources, `map_disaster_event` applies a
+deterministic policy per hazard. Everyday wording is normalized first, so a
+bushfire is a wildfire and a typhoon is a storm.
 
 `FLOODS`{ .tag }
-:   Grouped pre- and post-event OPERA and Sentinel-2 layers, all Overture
-    buildings and typed transportation in the AOI, highlighted flooded buildings
-    and affected roads, and open-access WorldPop exposure.
+:   Grouped pre- and post-event OPERA DSWx-HLS and cloud-penetrating DSWx-S1,
+    their combined derived post-event water, grouped pre/post Sentinel-2, all
+    Overture buildings and typed transportation in the AOI, highlighted flooded
+    buildings and affected roads, and open-access WorldPop exposure.
 
 `WILDFIRES`{ .tag }
 :   The matching NASA Disasters event group from NASA Earthdata GIS first, then
@@ -85,8 +91,26 @@ deterministic policy per hazard.
     time-filtered FEDS perimeter exists, the latest perimeter per fire becomes
     the exposure boundary and Overture and WorldPop queries narrow to it.
 
-If a perimeter or exposure service is unavailable, the workflow reports that
-limitation rather than labeling general context as impact.
+`STORMS`{ .tag }
+:   NOAA and National Hurricane Center track, cone, wind, and storm-surge
+    products, corroborated by OPERA DSWx observed water for the associated
+    flooding.
+
+`EARTHQUAKES`{ .tag }
+:   USGS event geometry, ShakeMap shaking intensity, and ground-failure
+    products, with OPERA displacement products as corroborating change when
+    available.
+
+`LANDSLIDES AND VOLCANOES`{ .tag }
+:   NASA landslide nowcasts and slope-change products, and USGS volcano
+    observatory alerts and mapped hazard observations.
+
+For hazards other than floods and wildfires, the workflow maps the
+highest-priority curated NASA event products it can resolve and adds contextual
+Overture and WorldPop layers, then states that quantified exposure still needs
+an authoritative hazard polygon. If a perimeter or exposure service is
+unavailable, it reports that limitation rather than labeling general context as
+impact. Full detail is on the [disaster workflows](disaster-workflow.md) page.
 
 ## Credentials
 

@@ -14,8 +14,9 @@ hide:
 # OPERA Plugin for GeoLibre
 
 <p class="hero-lede">Search NASA's OPERA products, put them on a MapLibre map, and ask an agent
-to turn a place and a date range into a flood impact one-pager. No Earthdata
-login in the browser.</p>
+to turn a hazard, a place, and a date range into a disaster impact assessment.
+Floods, fires, storms, quakes, landslides, eruptions. No Earthdata login in the
+browser.</p>
 
 [Source on GitHub](https://github.com/opengeos/geolibre-nasa-opera){ .md-button .md-button--primary }
 [Live demo](demo/){ .md-button }
@@ -38,7 +39,9 @@ login in the browser.</p>
 ## Video demos
 
 Four walkthroughs on real disasters: granule search and display, agent-driven
-flood mapping, land disturbance, and the plugin running inside GeoLibre.
+flood mapping, land disturbance, and the plugin running inside GeoLibre. Floods
+are the deepest-worked case, and the same workflow covers
+[five other hazard classes](disaster-workflow.md#hazard-coverage).
 
 <div class="demos">
 
@@ -154,12 +157,14 @@ flood mapping, land disturbance, and the plugin running inside GeoLibre.
 :   The [OPERA GeoAgent](geoagent.md) operates the live map in plain language.
     It navigates, adds layers and markers, inspects what is visible, takes
     screenshots, and calls the OPERA-specific tools registered by this plugin.
+    Ask it to map a hazard at a place over a date range and it runs the whole
+    [disaster workflow](disaster-workflow.md) itself.
 
 `REPORT`{ .tag }
 :   A self-contained, print- and PDF-ready
-    [one-pager](flood-workflow.md) with the map snapshot, flood benchmark,
-    building and transportation exposure, WorldPop population exposure, cited
-    impact figures, and a generated background narrative.
+    [assessment](disaster-workflow.md) with the map snapshot, the observed
+    hazard extent, building and transportation exposure, WorldPop population
+    exposure, cited impact figures, and a generated background narrative.
 
 ## Where to go next
 
@@ -167,7 +172,8 @@ flood mapping, land disturbance, and the plugin running inside GeoLibre.
   collections, their render defaults, and how CMR and titiler-cmr fit together.
 - [The OPERA GeoAgent](geoagent.md) - the domain tools the plugin registers and
   the prompts that drive them.
-- [Flood one-pager workflow](flood-workflow.md) - from a place and a date range
-  to a shareable impact summary.
+- [Disaster workflows](disaster-workflow.md) - floods, wildfires, storms,
+  earthquakes, landslides, and volcanoes, each with its own source policy, from
+  a place and a date range to a shareable impact summary.
 - [Build and install](install.md) - into the GeoLibre web build or the Tauri
   desktop app.
