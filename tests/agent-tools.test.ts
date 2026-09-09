@@ -149,6 +149,26 @@ describe("OPERA agent tools", () => {
     expect(control.newsImpactSearchForAgent).toHaveBeenCalledTimes(22);
   });
 
+  it("uses one timestamp when inserting a disaster search cache entry", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const control = {
+      newsImpactSearchForAgent: vi.fn(async () => ({
+        ok: true,
+        results: [],
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const search = tools.find((item) => item.name === "search_disasters")!;
+
+    await search._callback({ query: "historical disaster" });
+
+    expect(nowSpy).toHaveBeenCalledTimes(1);
+    nowSpy.mockRestore();
+  });
+
   it("forwards benchmark workflow inputs to the control", async () => {
     const control = {
       mapDisasterEventForAgent: vi.fn(async () => ({

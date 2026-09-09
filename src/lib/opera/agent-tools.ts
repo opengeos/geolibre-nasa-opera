@@ -988,7 +988,8 @@ export function createOperaAgentTools(
           normalizeDisasterQuery(input.query),
         ].join("|");
         const cached = disasterSearchCache.get(cacheKey);
-        if (!input.refresh && cached && cached.expiresAt > Date.now()) {
+        const now = Date.now();
+        if (!input.refresh && cached && cached.expiresAt > now) {
           return cached.result;
         }
         const result = controlOrThrow()
@@ -1000,9 +1001,9 @@ export function createOperaAgentTools(
           })
           .then(toJsonValue);
         disasterSearchCache.delete(cacheKey);
-        pruneDisasterSearchCache(disasterSearchCache, Date.now());
+        pruneDisasterSearchCache(disasterSearchCache, now);
         disasterSearchCache.set(cacheKey, {
-          expiresAt: Date.now() + DISASTER_SEARCH_CACHE_MS,
+          expiresAt: now + DISASTER_SEARCH_CACHE_MS,
           result,
         });
         void result.catch(() => {
