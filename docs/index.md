@@ -1,5 +1,5 @@
 ---
-title: NASA OPERA for GeoLibre
+title: Overview
 hide:
   - navigation
   - toc
@@ -11,7 +11,7 @@ hide:
 
 <p class="eyebrow">GeoLibre plugin &middot; v0.3.1 &middot; MIT</p>
 
-# NASA OPERA for GeoLibre
+# OPERA Plugin for GeoLibre
 
 <p class="hero-lede">Search NASA's OPERA products, put them on a MapLibre map, and ask an agent
 to turn a place and a date range into a flood impact one-pager. No Earthdata
