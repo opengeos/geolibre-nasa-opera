@@ -128,6 +128,27 @@ describe("OPERA agent tools", () => {
     expect(control.newsImpactSearchForAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds the duplicate disaster search cache", async () => {
+    const control = {
+      newsImpactSearchForAgent: vi.fn(async () => ({
+        ok: true,
+        results: [],
+      })),
+    };
+    const tools = createOperaAgentTools(() => control as never) as Array<{
+      name: string;
+      _callback: (input: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const search = tools.find((item) => item.name === "search_disasters")!;
+
+    for (let index = 0; index < 21; index += 1) {
+      await search._callback({ query: `historical disaster ${index}` });
+    }
+    await search._callback({ query: "historical disaster 0" });
+
+    expect(control.newsImpactSearchForAgent).toHaveBeenCalledTimes(22);
+  });
+
   it("forwards benchmark workflow inputs to the control", async () => {
     const control = {
       mapDisasterEventForAgent: vi.fn(async () => ({
@@ -333,11 +354,11 @@ describe("OPERA agent tools", () => {
     await tools
       .find((t) => t.name === "search_disasters")!
       ._callback({
-        query: "Valencia DANA flood",
+        query: "Valencia DANA flood October 2024 news",
         max_results: 6,
       });
     expect(control.newsImpactSearchForAgent).toHaveBeenLastCalledWith({
-      query: "Valencia DANA flood",
+      query: "Valencia DANA flood October 2024 news",
       maxResults: 6,
       topic: "general",
     });

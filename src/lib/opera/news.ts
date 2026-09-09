@@ -157,8 +157,9 @@ export async function searchNews(
   if (isManagedGeoLibreAiEndpoint(endpoint)) {
     return searchWithGptMessages(query, {
       ...options,
-      apiKey: options.gptApiKey || "geolibre-managed-proxy",
+      apiKey: "",
       baseUrl: endpoint,
+      omitAuthorization: true,
     });
   }
   const doFetch = options.fetchImpl ?? fetch;
@@ -220,7 +221,11 @@ export async function searchNews(
 
 async function searchWithGptMessages(
   query: string,
-  options: SearchNewsOptions & { apiKey: string; baseUrl: string },
+  options: SearchNewsOptions & {
+    apiKey: string;
+    baseUrl: string;
+    omitAuthorization?: boolean;
+  },
 ): Promise<{ results: NewsResult[]; answer?: string; endpoint: string }> {
   const endpoint = gptMessagesEndpoint(options.baseUrl);
   const doFetch = options.fetchImpl ?? fetch;
@@ -239,7 +244,9 @@ async function searchWithGptMessages(
     response = await doFetch(endpoint, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${options.apiKey}`,
+        ...(options.omitAuthorization
+          ? {}
+          : { Authorization: `Bearer ${options.apiKey}` }),
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
       },

@@ -54,6 +54,25 @@ describe("GPT news proxy Worker", () => {
     expect(request.text.format.schema.properties.results.maxItems).toBe(8);
   });
 
+  it("normalizes an OpenAI-compatible base URL ending in /v1", async () => {
+    const upstream = vi.fn(async () =>
+      Response.json({
+        output_text: JSON.stringify({ answer: "Summary", results: [] }),
+      }),
+    );
+    vi.stubGlobal("fetch", upstream);
+
+    await handleRequest(searchRequest(), {
+      ...ENV,
+      OPENAI_BASE_URL: "https://cli.example.com/v1/",
+    });
+
+    expect(upstream).toHaveBeenCalledWith(
+      "https://cli.example.com/v1/responses",
+      expect.any(Object),
+    );
+  });
+
   it("keeps only results grounded in returned web-search sources", () => {
     const payload = {
       output: [

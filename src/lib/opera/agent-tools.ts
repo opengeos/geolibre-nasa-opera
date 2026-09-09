@@ -558,17 +558,35 @@ const onePagerSchema = z.object({
 type TitilerCommonInput = z.infer<typeof titilerCommonSchema>;
 
 const FRESH_DISASTER_SEARCH_RE =
-  /\b(?:now|today|current|currently|latest|live|ongoing|recent|recently|news|this week|past \d+ days?)\b/i;
+  /\b(?:now|today|current|currently|latest|live|ongoing|recent|recently|this week|past \d+ days?)\b/i;
+const EXPLICIT_DISASTER_DATE_RE = /\b(?:1[6-9]|20)\d{2}\b/;
 const DISASTER_SEARCH_CACHE_MS = 5 * 60 * 1000;
+const DISASTER_SEARCH_CACHE_MAX_ENTRIES = 20;
 
 /** Return whether a disaster query explicitly requests fresh information. */
 function requestsFreshDisasterInformation(query: string): boolean {
+  if (EXPLICIT_DISASTER_DATE_RE.test(query)) return false;
   return FRESH_DISASTER_SEARCH_RE.test(query);
 }
 
 /** Normalize a disaster query for short-lived duplicate-request caching. */
 function normalizeDisasterQuery(query: string): string {
   return query.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Remove expired and oldest disaster search cache entries before insertion. */
+function pruneDisasterSearchCache(
+  cache: Map<string, { expiresAt: number; result: Promise<JSONValue> }>,
+  now: number,
+): void {
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) cache.delete(key);
+  }
+  while (cache.size >= DISASTER_SEARCH_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey !== "string") break;
+    cache.delete(oldestKey);
+  }
 }
 
 export function createOperaAgentTools(
@@ -981,6 +999,8 @@ export function createOperaAgentTools(
             ...(fresh ? { days } : {}),
           })
           .then(toJsonValue);
+        disasterSearchCache.delete(cacheKey);
+        pruneDisasterSearchCache(disasterSearchCache, Date.now());
         disasterSearchCache.set(cacheKey, {
           expiresAt: Date.now() + DISASTER_SEARCH_CACHE_MS,
           result,

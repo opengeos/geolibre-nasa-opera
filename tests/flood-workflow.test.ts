@@ -388,6 +388,8 @@ describe("news", () => {
       "/ai/v1/messages",
       expect.objectContaining({ method: "POST" }),
     );
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
     expect(out.results[0]?.publisher).toBe("example.gov.np");
   });
 

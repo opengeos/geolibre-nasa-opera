@@ -100,10 +100,9 @@ export async function handleRequest(request, env = {}) {
   }
 
   const requestBody = buildGptSearchRequest(body, query, env.OPENAI_MODEL);
-  const baseUrl = String(env.OPENAI_BASE_URL || OPENAI_ENDPOINT).replace(
-    /\/+$/,
-    "",
-  );
+  const baseUrl = String(env.OPENAI_BASE_URL || OPENAI_ENDPOINT)
+    .replace(/\/+$/, "")
+    .replace(/\/v1$/, "");
   let upstream;
   try {
     upstream = await fetch(`${baseUrl}/v1/responses`, {
