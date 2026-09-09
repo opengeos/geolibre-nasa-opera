@@ -10,6 +10,10 @@
   --md-accent-fg-color: #0e8ba9;
   --md-accent-fg-color--transparent: rgba(14, 139, 169, 0.1);
 
+  /* Links take the primary teal, which the theme does by default. Stated
+     here so the slate override below reads as a pair. */
+  --md-typeset-a-color: #0a7692;
+
   --opera-panel: #f4f7f8;
   --opera-line: #d0d9db;
   --opera-line-strong: #b4c1c4;
@@ -24,6 +28,10 @@
   --md-primary-fg-color--dark: #061c24;
   --md-accent-fg-color: #4ec4e6;
   --md-accent-fg-color--transparent: rgba(78, 196, 230, 0.1);
+
+  /* The slate primary is the dark header navy, and links default to primary,
+     which would put near-black text on a near-black ground. Use the cyan. */
+  --md-typeset-a-color: #5ecdee;
 
   --opera-panel: #142a35;
   --opera-line: #1d3542;
@@ -411,4 +419,14 @@
   background-color: var(--md-accent-fg-color--light, #7dd6ee);
   border-color: var(--md-accent-fg-color--light, #7dd6ee);
   color: #062029;
+}
+
+/* --------------------------------------------------------------------------
+   Link hover in slate: the resting color is already the accent, so lift the
+   hover a step rather than leaving it unchanged.
+   -------------------------------------------------------------------------- */
+
+[data-md-color-scheme="slate"] .md-typeset a:hover,
+[data-md-color-scheme="slate"] .md-typeset a:focus {
+  color: #9fe2f6;
 }
