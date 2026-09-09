@@ -189,12 +189,43 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
   const reportProject = input.geoLibreProject
     ? (JSON.parse(JSON.stringify(input.geoLibreProject)) as Record<string, unknown> & {
         plugins?: { activePluginIds?: unknown[] };
+        layers?: Array<{
+          id?: unknown;
+          name?: unknown;
+          groupId?: unknown;
+          visible?: boolean;
+          metadata?: { sourceKind?: unknown };
+        }>;
+        layerGroups?: Array<{
+          id?: unknown;
+          name?: unknown;
+          visible?: boolean;
+        }>;
       })
     : undefined;
   if (reportProject?.plugins?.activePluginIds) {
     reportProject.plugins.activePluginIds = reportProject.plugins.activePluginIds.filter(
       (id) => id !== "maplibre-gl-overture-maps",
     );
+  }
+  const hiddenReportGroupIds = new Set<string>();
+  for (const group of reportProject?.layerGroups ?? []) {
+    const name = String(group.name ?? "");
+    if (/^Pre-event OPERA\b/i.test(name) || /Sentinel-2/i.test(name)) {
+      group.visible = true;
+      if (typeof group.id === "string") hiddenReportGroupIds.add(group.id);
+    }
+  }
+  for (const layer of reportProject?.layers ?? []) {
+    const sourceKind = String(layer.metadata?.sourceKind ?? "");
+    if (
+      (typeof layer.groupId === "string" &&
+        hiddenReportGroupIds.has(layer.groupId)) ||
+      /sentinel-2/i.test(String(layer.name ?? layer.id ?? "")) ||
+      sourceKind === "sentinel-2-event-imagery"
+    ) {
+      layer.visible = false;
+    }
   }
   const buildings = input.buildings;
   const buildingsBlock = buildings
@@ -230,10 +261,13 @@ export function buildOnePagerHtml(input: OnePagerInput): string {
          }</div>
        </div>`
     : "";
-  const impacts = input.impacts ?? [];
+  const impacts = (input.impacts ?? []).slice(0, 3);
   const impactsBlock = impacts.length
     ? `<div class="impacts">${impacts.map(impactCard).join("")}</div>`
     : `<p class="muted">No cited impacts supplied.</p>`;
+  const hasModeledExposure = Boolean(
+    buildings || population || transportation,
+  );
   const sources = input.sources ?? [];
   const sourcesBlock = sources.length
     ? `<div class="sources"><h3>Sources</h3>${sources
@@ -308,6 +342,8 @@ ${input.geoLibreProject ? `<link rel="stylesheet" href="https://unpkg.com/maplib
   .exposure-value { font-size: 30px; font-weight: 800; color:#1d4ed8; line-height:1; }
   .exposure-label { font-size: 12px; color:#334155; }
   .exposure-sub { font-size: 10px; color:#64748b; margin-top: 4px; }
+  .impact-section + .impact-section { margin-top: 14px; padding-top: 12px; border-top:1px solid #cbd5e1; }
+  .scope-note { margin: -2px 0 8px; color:#64748b; font-size:10px; line-height:1.3; }
   .impacts { display:flex; flex-direction: column; gap: 8px; }
   a.impact { display:block; text-decoration:none; color:inherit; border:1px solid #cbd5e1; border-radius:6px; padding: 8px 10px; background:#fff; }
   a.impact:hover { border-color:#2563eb; }
@@ -358,11 +394,16 @@ ${input.geoLibreProject ? `<link rel="stylesheet" href="https://unpkg.com/maplib
         </div>
       </div>
       <div class="panel impact-panel">
-        <h2>Impacts</h2>
-        ${buildingsBlock}
-        ${populationBlock}
-        ${transportationBlock}
-        ${impactsBlock}
+        ${
+          hasModeledExposure
+            ? `<section class="impact-section"><h2>Modeled exposure in observed extent</h2>${buildingsBlock}${populationBlock}${transportationBlock}</section>`
+            : ""
+        }
+        <section class="impact-section">
+          <h2>Reported event-wide impacts</h2>
+          <p class="scope-note">Reported figures may cover a wider affected area than this mapped AOI. They have different geographic scopes and should not be compared directly with the modeled exposure above.</p>
+          ${impactsBlock}
+        </section>
         ${sourcesBlock}
       </div>
     </div>

@@ -578,15 +578,37 @@ describe("one-pager", () => {
           publisher: "reuters.com",
           date: "2024-11-01",
         },
+        {
+          claim: "Affected residents",
+          value: "845,000",
+          sourceUrl: "https://example.com/affected",
+        },
+        {
+          claim: "Direct damage",
+          value: "€18.08 billion",
+          sourceUrl: "https://example.com/damage",
+        },
+        {
+          claim: "Fourth impact",
+          value: "Must be omitted",
+          sourceUrl: "https://example.com/fourth",
+        },
       ],
       generatedAt: "2026-07-11",
     });
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("Valencia DANA");
     expect(html).toContain("https://www.reuters.com/x");
+    expect(html).toContain("https://example.com/damage");
+    expect(html).not.toContain("https://example.com/fourth");
     expect(html).toContain("1,200"); // building count formatted
     expect(html).toContain("125,000");
     expect(html).toContain("32.4 km");
+    expect(html).toContain("Modeled exposure in observed extent");
+    expect(html).toContain("Reported event-wide impacts");
+    expect(html).toContain(
+      "different geographic scopes and should not be compared directly",
+    );
     expect(html).toContain("window.print()");
     expect(html).toContain("https://assets.geolibre.app/images/jpl-logo.webp");
     expect(html).toContain("https://assets.geolibre.app/images/opera-logo.webp");
@@ -612,7 +634,33 @@ describe("one-pager", () => {
       geoLibreProject: {
         name: "water-</script>",
         mapView: { center: [-0.5, 38.5], zoom: 8 },
-        layers: [{ id: "overture-derived", name: "Saved Overture buildings" }],
+        layers: [
+          {
+            id: "opera-pre",
+            name: "Pre-event OPERA DSWx-HLS",
+            visible: true,
+            groupId: "pre-opera",
+          },
+          {
+            id: "opera-post",
+            name: "Post-event OPERA DSWx-HLS",
+            visible: true,
+            groupId: "post-opera",
+          },
+          { id: "overture-derived", name: "Saved Overture buildings" },
+        ],
+        layerGroups: [
+          {
+            id: "pre-opera",
+            name: "Pre-event OPERA DSWx-HLS + DSWx-S1 - Event",
+            visible: true,
+          },
+          {
+            id: "post-opera",
+            name: "Post-event OPERA DSWx-HLS + DSWx-S1 - Event",
+            visible: true,
+          },
+        ],
         plugins: {
           activePluginIds: ["maplibre-layer-control", "maplibre-gl-overture-maps"],
         },
@@ -642,6 +690,26 @@ describe("one-pager", () => {
     expect(html).not.toContain('id="layer-panel"');
     expect(html).not.toContain('"maplibre-gl-overture-maps"');
     expect(html).toContain("Saved Overture buildings");
+    const embeddedProjectText = html.match(
+      /<script type="application\/json" id="geolibre-project">([^<]+)<\/script>/,
+    )?.[1];
+    expect(embeddedProjectText).toBeTruthy();
+    const embeddedProject = JSON.parse(embeddedProjectText ?? "{}");
+    expect(
+      embeddedProject.layerGroups.find(
+        (group: { id: string }) => group.id === "pre-opera",
+      )?.visible,
+    ).toBe(true);
+    expect(
+      embeddedProject.layers.find(
+        (layer: { id: string }) => layer.id === "opera-pre",
+      )?.visible,
+    ).toBe(false);
+    expect(
+      embeddedProject.layers.find(
+        (layer: { id: string }) => layer.id === "opera-post",
+      )?.visible,
+    ).toBe(true);
     expect(html).not.toContain('<div class="scalebar">');
     expect(html).toContain("expert validation before use for decision-making");
     expect(html).not.toContain("water-</script>");
