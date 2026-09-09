@@ -1,4 +1,4 @@
-name: Deploy Examples to GitHub Pages
+name: Deploy Site to GitHub Pages
 
 on:
   push:
@@ -27,8 +27,15 @@ jobs:
           node-version: '24'
           cache: 'npm'
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          pip install zensical
 
       - name: Run tests
         run: npm test
@@ -38,6 +45,16 @@ jobs:
 
       - name: Build examples for deployment
         run: npm run build:examples
+        env:
+          PAGES_BASE: /demo/
+
+      - name: Build documentation site
+        run: zensical build --clean --strict
+
+      - name: Add the standalone demo under /demo/
+        run: |
+          mkdir -p site/demo
+          cp -R dist-examples/. site/demo/
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
@@ -47,10 +64,12 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: './dist-examples'
+          path: './site'
 
   deploy:
-    environment: github-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
     steps:
