@@ -430,3 +430,31 @@
 [data-md-color-scheme="slate"] .md-typeset a:focus {
   color: #9fe2f6;
 }
+
+/* --------------------------------------------------------------------------
+   Embedded slide deck
+   -------------------------------------------------------------------------- */
+
+.md-typeset .slides-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  margin: 1.4rem 0 0.6rem;
+  border: 1px solid var(--opera-line-strong);
+  background: var(--opera-panel);
+}
+
+.md-typeset .slides-frame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.md-typeset .slides-note {
+  font-size: 0.7rem;
+  line-height: 1.6;
+  color: var(--opera-faint);
+  margin: 0;
+}

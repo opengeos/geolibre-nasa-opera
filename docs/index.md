@@ -177,3 +177,4 @@ are the deepest-worked case, and the same workflow covers
   a place and a date range to a shareable impact summary.
 - [Build and install](install.md) - into the GeoLibre web build or the Tauri
   desktop app.
+- [Slides](slides.md) - the talk this site accompanies, as a PDF deck.
