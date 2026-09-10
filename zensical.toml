@@ -24,6 +24,7 @@ nav = [
   { "GeoAgent" = "geoagent.md" },
   { "Disaster workflows" = "disaster-workflow.md" },
   { "Install" = "install.md" },
+  { "Slides" = "slides.md" },
 ]
 
 extra_css = ["stylesheets/extra.css"]
