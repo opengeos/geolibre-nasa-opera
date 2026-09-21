@@ -248,23 +248,35 @@ build from the `OPENAI_API_KEY` environment variable:
 
 ```bash
 export OPENAI_API_KEY=sk-...
-npm run build:geolibre    # or: npm run dev
+OPERA_BUNDLE_KEYS=1 npm run build:geolibre    # or: OPERA_BUNDLE_KEYS=1 npm run dev
 ```
 
-When set, the key is passed to the GeoAgent's `apiKeys` option and the panel
-starts ready to chat; a key the user later enters (saved in `sessionStorage`)
-still takes precedence. When `OPENAI_API_KEY` is unset (the default), nothing is
-bundled and the panel falls back to manual key entry.
+Both parts are required. `OPENAI_API_KEY` alone is **not** enough: exporting it
+is something many developers do for unrelated tools, so the build refuses to
+inline it without `OPERA_BUNDLE_KEYS=1` as well. Without the flag the build
+prints a note saying the key was found and skipped, and produces a bundle with
+no credential in it.
+
+When both are set, the key is passed to the GeoAgent's `apiKeys` option and the
+panel starts ready to chat; a key the user later enters (saved in
+`sessionStorage`) still takes precedence.
 
 > **Security:** bundling a key ships it to every browser that loads the app.
-> Use this only for controlled/sponsor demo deployments. For public deployments,
-> leave it unset and put the key behind a server-side proxy.
+> Use this only for controlled/sponsor demo deployments, and never publish the
+> resulting bundle to npm or the plugin registry. For public deployments, leave
+> the flag unset and put the key behind a server-side proxy.
+>
+> Every build runs `npm run check:secrets` over its output and fails if a
+> credential-shaped string is found, so an accidental key cannot reach a
+> published bundle. With `OPERA_BUNDLE_KEYS=1` the check reports what it found
+> and lets the build through, because you asked for it.
 
 ### Local testing in GeoLibre with CLIProxyAPI
 
-For controlled local testing, the plugin build reads `CLI_PROXY_API_KEY` and
-prefills GeoAgent's OpenAI-compatible provider, API URL, and model. This exposes
-the key in the local browser bundle, so do not publish that build.
+For controlled local testing, the plugin build reads `CLI_PROXY_API_KEY` (again
+only when `OPERA_BUNDLE_KEYS=1` is also set) and prefills GeoAgent's
+OpenAI-compatible provider, API URL, and model. This exposes the key in the
+local browser bundle, so do not publish that build.
 
 If the key is exported by `~/.zshrc`, run the build through interactive zsh so
 the file is loaded even when the calling terminal or automation is
@@ -273,7 +285,7 @@ non-interactive:
 ```bash
 export OPERA_PLUGIN_DIR="$(pwd)"
 export GEOLIBRE_TEST_DIR="$(cd ../GeoLibre && pwd)"
-zsh -ic 'cd "$OPERA_PLUGIN_DIR" && npm install && npm run install:geolibre -- --web "$GEOLIBRE_TEST_DIR"'
+zsh -ic 'cd "$OPERA_PLUGIN_DIR" && npm install && OPERA_BUNDLE_KEYS=1 npm run install:geolibre -- --web "$GEOLIBRE_TEST_DIR"'
 
 cd "$GEOLIBRE_TEST_DIR"
 npm run dev
