@@ -2723,7 +2723,9 @@ export class OperaControl implements IControl {
     if (!news.ok) warnings.push(news.status);
     const citedImpacts = news.ok ? citedImpactsFromNews(news.results) : [];
 
-    const addSentinelPair = async (imageryBBox: BBox = bbox): Promise<{
+    const addSentinelPair = async (
+      imageryBBox: BBox = bbox,
+    ): Promise<{
       preEvent: OperaAgentSentinel2Result;
       postEvent: OperaAgentSentinel2Result;
     }> => {
@@ -3259,8 +3261,7 @@ export class OperaControl implements IControl {
         .filter(
           (layer) =>
             layer.type === "raster" &&
-            (layer.id.includes("sentinel-2") ||
-              layer.id.includes("worldpop")),
+            (layer.id.includes("sentinel-2") || layer.id.includes("worldpop")),
         )
         .map((layer) => ({
           id: layer.id,
@@ -4767,6 +4768,9 @@ export class OperaControl implements IControl {
     const fileInput = document.createElement("input");
     fileInput.type = "file";
     fileInput.accept = ".geojson,.json,application/geo+json,application/json";
+    // Driven by the button above and kept out of the a11y tree by display:none,
+    // so axe never sees it; named anyway so it reads correctly if ever shown.
+    fileInput.setAttribute("aria-label", "Upload benchmark GeoJSON");
     fileInput.style.display = "none";
     fileInput.addEventListener("change", () => {
       const file = fileInput.files?.[0];
@@ -4817,8 +4821,10 @@ export class OperaControl implements IControl {
 
   private _buildProductGroup(): HTMLElement {
     const group = el("div", "plugin-control-group");
-    group.appendChild(label("Product"));
+    const id = nextControlId("product");
+    group.appendChild(label("Product", id));
     const select = document.createElement("select");
+    select.id = id;
     select.className = "plugin-control-input opera-select";
     select.dataset.field = "product";
     for (const p of OPERA_PRODUCTS) {
@@ -4840,7 +4846,8 @@ export class OperaControl implements IControl {
     const group = el("div", "plugin-control-group");
     const row = document.createElement("div");
     row.className = "opera-label-row";
-    row.appendChild(label("Bounding box (W, S, E, N)"));
+    const bboxId = nextControlId("bbox");
+    row.appendChild(label("Bounding box (W, S, E, N)", bboxId));
 
     const actions = document.createElement("span");
     actions.className = "opera-bbox-actions";
@@ -4863,6 +4870,7 @@ export class OperaControl implements IControl {
     group.appendChild(row);
 
     const input = document.createElement("input");
+    input.id = bboxId;
     input.className = "plugin-control-input";
     input.type = "text";
     input.placeholder = "west, south, east, north";
@@ -4880,10 +4888,14 @@ export class OperaControl implements IControl {
     group.appendChild(label("Date range"));
     const row = document.createElement("div");
     row.className = "plugin-control-flex";
+    // One "Date range" caption covers both inputs, so it cannot name either of
+    // them on its own; each carries its own accessible name instead.
+    const dateNames = { start: "Start date", end: "End date" } as const;
     for (const field of ["start", "end"] as const) {
       const input = document.createElement("input");
       input.className = "plugin-control-input";
       input.type = "date";
+      input.setAttribute("aria-label", dateNames[field]);
       input.value = this._state[field];
       input.dataset.field = field;
       input.addEventListener("input", () => {
@@ -4897,8 +4909,10 @@ export class OperaControl implements IControl {
 
   private _buildCountGroup(): HTMLElement {
     const group = el("div", "plugin-control-group");
-    group.appendChild(label("Max results"));
+    const id = nextControlId("count");
+    group.appendChild(label("Max results", id));
     const input = document.createElement("input");
+    input.id = id;
     input.className = "plugin-control-input";
     input.type = "number";
     input.min = "1";
@@ -5048,8 +5062,10 @@ export class OperaControl implements IControl {
 
   private _buildBandGroup(): HTMLElement {
     const group = el("div", "plugin-control-group");
-    group.appendChild(label("Layer / band"));
+    const id = nextControlId("band");
+    group.appendChild(label("Layer / band", id));
     const select = document.createElement("select");
+    select.id = id;
     select.className = "plugin-control-input opera-select";
     select.addEventListener("change", () =>
       this._applyBandDefaults(select.value),
@@ -5107,8 +5123,10 @@ export class OperaControl implements IControl {
     const wrap = document.createElement("div");
 
     const rescaleGroup = el("div", "plugin-control-group");
-    rescaleGroup.appendChild(label("Rescale (min,max)"));
+    const rescaleId = nextControlId("rescale");
+    rescaleGroup.appendChild(label("Rescale (min,max)", rescaleId));
     const rescale = document.createElement("input");
+    rescale.id = rescaleId;
     rescale.className = "plugin-control-input";
     rescale.type = "text";
     rescale.placeholder = "auto — e.g. 0,3000 for DEM";
@@ -5122,8 +5140,10 @@ export class OperaControl implements IControl {
     rescaleGroup.appendChild(rescale);
 
     const cmapGroup = el("div", "plugin-control-group");
-    cmapGroup.appendChild(label("Colormap"));
+    const cmapId = nextControlId("colormap");
+    cmapGroup.appendChild(label("Colormap", cmapId));
     const cmap = document.createElement("select");
+    cmap.id = cmapId;
     cmap.className = "plugin-control-input opera-select";
     cmap.dataset.field = "colormapName";
     for (const name of COLORMAP_NAMES) {
@@ -5151,7 +5171,8 @@ export class OperaControl implements IControl {
   private _buildExpressionGroup(): HTMLElement {
     const group = el("div", "plugin-control-group");
     const row = el("div", "opera-label-row");
-    row.appendChild(label("Expression (band math)"));
+    const exprId = nextControlId("expression");
+    row.appendChild(label("Expression (band math)", exprId));
 
     const presets = document.createElement("select");
     presets.className = "opera-expr-presets";
@@ -5168,6 +5189,7 @@ export class OperaControl implements IControl {
     group.appendChild(row);
 
     const input = document.createElement("input");
+    input.id = exprId;
     input.className = "plugin-control-input";
     input.type = "text";
     input.placeholder = "blank = raw band — e.g. 10*log10(b1)";
@@ -5810,8 +5832,10 @@ export class OperaControl implements IControl {
 
   private _buildEndpointGroup(): HTMLElement {
     const group = el("div", "plugin-control-group opera-endpoint");
-    group.appendChild(label("titiler-cmr endpoint"));
+    const id = nextControlId("endpoint");
+    group.appendChild(label("titiler-cmr endpoint", id));
     const input = document.createElement("input");
+    input.id = id;
     input.className = "plugin-control-input";
     input.type = "text";
     input.value = this._state.endpoint;
@@ -5977,10 +6001,27 @@ function el(tag: string, className: string): HTMLElement {
   return node;
 }
 
-function label(text: string): HTMLElement {
+/**
+ * Unique ids for the label/control pairs below. The panel can be mounted more
+ * than once (two maps, or a remount), and duplicate ids would make every
+ * `<label for>` resolve to the first copy's control.
+ */
+let controlIdSeq = 0;
+function nextControlId(field: string): string {
+  controlIdSeq += 1;
+  return `opera-${field}-${controlIdSeq}`;
+}
+
+/**
+ * A control's visible caption. Pass the control's id as `htmlFor` so the
+ * caption is also its accessible name — without it the `<label>` is styling
+ * only, and axe reports a critical `label` / `select-name` violation.
+ */
+function label(text: string, htmlFor?: string): HTMLLabelElement {
   const node = document.createElement("label");
   node.className = "plugin-control-label";
   node.textContent = text;
+  if (htmlFor) node.htmlFor = htmlFor;
   return node;
 }
 
