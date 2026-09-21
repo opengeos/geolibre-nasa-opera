@@ -298,6 +298,37 @@ describe("renderer-neutral overlays and picking", () => {
     );
   });
 
+  it("drops stale footprints when a later search finds nothing", async () => {
+    const plugin = await freshPlugin();
+    const container = document.createElement("div");
+    const facade = globeFacade(container);
+    const { app, registrations } = mountWith(facade);
+    plugin.activate(app);
+    const control = vi.mocked(app.addMapControl).mock
+      .calls[0][0] as unknown as OperaControl;
+    control.onAdd?.(facade as never);
+
+    const internals = control as unknown as {
+      _addFootprintsLayer(
+        name: string,
+        data: { type: "FeatureCollection"; features: unknown[] },
+      ): void;
+      _removeFootprintsStoreLayer(): void;
+    };
+    internals._addFootprintsLayer("OPERA DSWX-HLS Footprints (1)", {
+      type: "FeatureCollection",
+      features: [BUILDINGS.features[0]],
+    });
+    expect(registrations.at(-1)?.id).toBe("opera-granule-footprints");
+
+    // The store path reuses one id, so an empty result must drop the layer
+    // rather than leave the previous search's footprints on the map.
+    internals._removeFootprintsStoreLayer();
+    expect(app.unregisterExternalNativeLayer).toHaveBeenCalledWith(
+      "opera-granule-footprints",
+    );
+  });
+
   it("refuses map drawing on a renderer with no interaction handlers", async () => {
     const plugin = await freshPlugin();
     const container = document.createElement("div");

@@ -3843,14 +3843,18 @@ export class OperaControl implements IControl {
       this._granules = result.granules;
       this._renderResults();
 
-      if (
-        opts.addFootprints !== false &&
-        result.featureCollection.features.length > 0
-      ) {
-        this._addFootprintsLayer(
-          `OPERA ${product.shortTitle} Footprints (${result.granules.length})`,
-          result.featureCollection,
-        );
+      if (opts.addFootprints !== false) {
+        if (result.featureCollection.features.length > 0) {
+          this._addFootprintsLayer(
+            `OPERA ${product.shortTitle} Footprints (${result.granules.length})`,
+            result.featureCollection,
+          );
+        } else {
+          // The store path reuses one layer id, so a search that finds nothing
+          // would otherwise leave the previous search's footprints on the map,
+          // outliving the results table they belong to and unselectable.
+          this._removeFootprintsStoreLayer();
+        }
       }
       if (opts.fitBounds !== false && result.bounds) {
         this._options.fitBounds?.(result.bounds);
@@ -3917,6 +3921,19 @@ export class OperaControl implements IControl {
    */
   private _vectorsOccludeRasters(): boolean {
     return !this._hasStyleLayerApi();
+  }
+
+  /** Drop the footprints store layer, if this control registered one. */
+  private _removeFootprintsStoreLayer(): void {
+    if (!this._registeredLayerIds.includes(FOOTPRINTS_STORE_LAYER)) return;
+    try {
+      this._options.unregisterLayer?.(FOOTPRINTS_STORE_LAYER);
+    } catch {
+      // The host may already have dropped it; nothing else to undo.
+    }
+    this._registeredLayerIds = this._registeredLayerIds.filter(
+      (id) => id !== FOOTPRINTS_STORE_LAYER,
+    );
   }
 
   private async _onDisplay(
