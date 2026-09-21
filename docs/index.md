@@ -9,7 +9,7 @@ hide:
   <canvas id="opera-mosaic" aria-hidden="true"></canvas>
   <div class="hero-inner" markdown>
 
-<p class="eyebrow">GeoLibre plugin &middot; v0.3.1 &middot; MIT</p>
+<p class="eyebrow">GeoLibre plugin &middot; v0.4.0 &middot; MIT</p>
 
 # OPERA Plugin for GeoLibre
 
