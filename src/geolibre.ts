@@ -677,7 +677,7 @@ function isNasaOperaProjectState(
 export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
-  version: "0.3.1",
+  version: "0.4.0",
   engines: ["maplibre", "cesium"],
   restoresPanelCollapseState: true,
   activate(app) {
