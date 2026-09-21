@@ -212,6 +212,122 @@ describe("renderer-neutral layer registration", () => {
   });
 });
 
+describe("renderer-neutral overlays and picking", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+  });
+
+  /** Put two granules with known footprints into the control's results. */
+  function seedGranules(control: OperaControl) {
+    const square = (west: number): unknown => ({
+      type: "Polygon",
+      coordinates: [
+        [
+          [west, 0],
+          [west, 2],
+          [west + 2, 2],
+          [west + 2, 0],
+          [west, 0],
+        ],
+      ],
+    });
+    (
+      control as unknown as {
+        _granules: Array<{ id: string; geometry: unknown }>;
+        _selectedIds: Set<string>;
+      }
+    )._granules = [
+      { id: "G-west", geometry: square(0) },
+      { id: "G-east", geometry: square(10) },
+    ];
+  }
+
+  it("hit-tests footprints geometrically when the map cannot pick", async () => {
+    const plugin = await freshPlugin();
+    const container = document.createElement("div");
+    const facade = globeFacade(container);
+    const { app } = mountWith(facade);
+    plugin.activate(app);
+    const control = vi.mocked(app.addMapControl).mock
+      .calls[0][0] as unknown as OperaControl;
+    control.onAdd?.(facade as never);
+    seedGranules(control);
+
+    const pick = (lng: number, lat: number) =>
+      (
+        control as unknown as {
+          _granuleAtPoint(e: unknown): { id: string } | undefined;
+        }
+      )._granuleAtPoint({ lngLat: { lng, lat }, point: { x: 0, y: 0 } });
+
+    expect(pick(1, 1)?.id).toBe("G-west");
+    expect(pick(11, 1)?.id).toBe("G-east");
+    expect(pick(50, 50)).toBeUndefined();
+  });
+
+  it("draws the selection highlight as a store layer on the globe", async () => {
+    const plugin = await freshPlugin();
+    const container = document.createElement("div");
+    const facade = globeFacade(container);
+    const { app, registrations } = mountWith(facade);
+    plugin.activate(app);
+    const control = vi.mocked(app.addMapControl).mock
+      .calls[0][0] as unknown as OperaControl;
+    control.onAdd?.(facade as never);
+    seedGranules(control);
+
+    const internals = control as unknown as {
+      _selectedIds: Set<string>;
+      _highlightSelectedFootprints(): void;
+      _clearHighlight(): void;
+    };
+    internals._selectedIds = new Set(["G-east"]);
+    expect(() => internals._highlightSelectedFootprints()).not.toThrow();
+
+    const highlight = registrations.at(-1);
+    expect(highlight?.id).toBe("opera-footprint-highlight");
+    expect(highlight?.nativeLayerIds).toEqual([]);
+    expect(highlight?.geojson?.features).toHaveLength(1);
+    expect(highlight?.style?.strokeColor).toBe("#ffd400");
+
+    // Clearing the selection drops the layer rather than leaving an empty one.
+    internals._clearHighlight();
+    expect(app.unregisterExternalNativeLayer).toHaveBeenCalledWith(
+      "opera-footprint-highlight",
+    );
+  });
+
+  it("refuses map drawing on a renderer with no interaction handlers", async () => {
+    const plugin = await freshPlugin();
+    const container = document.createElement("div");
+    const facade = globeFacade(container);
+    const { app } = mountWith(facade);
+    plugin.activate(app);
+    const control = vi.mocked(app.addMapControl).mock
+      .calls[0][0] as unknown as OperaControl;
+    control.onAdd?.(facade as never);
+
+    expect(control.toggleAgentAoiDraw()).toBe(false);
+    expect(container.textContent).toContain(
+      "Drawing on the map is not available on this renderer",
+    );
+  });
+
+  it("tears down cleanly on the globe without touching style layers", async () => {
+    const plugin = await freshPlugin();
+    const container = document.createElement("div");
+    const facade = globeFacade(container);
+    const { app } = mountWith(facade);
+    plugin.activate(app);
+    const control = vi.mocked(app.addMapControl).mock
+      .calls[0][0] as unknown as OperaControl;
+    control.onAdd?.(facade as never);
+
+    expect(() => control.onRemove?.()).not.toThrow();
+  });
+});
+
 describe("renderer-neutral viewport reads", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
