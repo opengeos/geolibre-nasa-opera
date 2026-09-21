@@ -69,8 +69,11 @@ import { geocodePlaceBounds, type GeocodedPlace } from "../opera/geocode";
 import {
   buildingsInFlood,
   dedupeOvertureFeatures,
+  pointInGeometry,
   transportationInFlood,
+  type AreaGeometry,
   type GeoFeatureCollection,
+  type Position,
 } from "../opera/geometry";
 import { searchNews, type NewsResult } from "../opera/news";
 import { buildOnePagerHtml, type OnePagerImpact } from "../opera/one-pager";
@@ -658,6 +661,11 @@ const HL_LINE = "opera-hl-line";
 const AGENT_AOI_SRC = "opera-agent-aoi-src";
 const AGENT_AOI_FILL = "opera-agent-aoi-fill";
 const AGENT_AOI_LINE = "opera-agent-aoi-line";
+// Store-layer ids for the same two overlays on renderers with no style layers
+// (the Cesium globe), where the host draws them from the record instead.
+const HL_STORE_LAYER = "opera-footprint-highlight";
+const AGENT_AOI_STORE_LAYER = "opera-agent-aoi";
+const FOOTPRINTS_STORE_LAYER = "opera-granule-footprints";
 
 type BBoxFeature = {
   type: "Feature";
@@ -3210,7 +3218,10 @@ export class OperaControl implements IControl {
       };
       try {
         map.once("render", () => finish(grab()));
-        map.triggerRepaint();
+        // Absent on the globe's control facade, which drives its own render
+        // loop. Skip it there rather than throwing past the timer below, which
+        // is what actually produces the frame in that case.
+        if (typeof map.triggerRepaint === "function") map.triggerRepaint();
         // Fallback so a map that never emits "render" (already idle) can't hang
         // the one-pager build; grab whatever is on the canvas instead.
         setTimeout(() => finish(grab()), 2000);
@@ -3423,11 +3434,28 @@ export class OperaControl implements IControl {
     this._registeredLayerIds = this._registeredLayerIds.filter(
       (registeredId) => registeredId !== id,
     );
-    if (!this._map) return;
+    const map = this._map;
+    if (!map || !this._hasStyleLayerApi()) return;
     for (const layerId of [...nativeLayerIds].reverse()) {
-      if (this._map.getLayer(layerId)) this._map.removeLayer(layerId);
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
     }
-    if (this._map.getSource(sourceId)) this._map.removeSource(sourceId);
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+  }
+
+  /**
+   * Whether the map this control was handed can paint Mapbox Style Spec layers.
+   *
+   * On the Cesium globe the host mounts MapLibre controls on a facade that
+   * answers the camera, container and event API but throws on `addSource` /
+   * `addLayer` and omits `getLayer` outright. The facade is truthy, so a
+   * `if (!map)` guard does not catch it — probe for `getLayer`, which only a
+   * real Style Spec map has. Same shape as GeoLibre's own `hasStyleLayerApi`.
+   */
+  private _hasStyleLayerApi(): boolean {
+    const map = this._map as Partial<MapLibreMap> | undefined;
+    return (
+      typeof map?.getLayer === "function" && typeof map?.addLayer === "function"
+    );
   }
 
   private _addStyledGeoJsonImpactLayer(options: {
@@ -3465,6 +3493,17 @@ export class OperaControl implements IControl {
       [...nativeLayerIds, ...obsoleteLayerIds],
       sourceId,
     );
+    // Without a Style Spec map (the Cesium globe), hand the host the data and
+    // the styling hints and let it own the source: the registration below
+    // already carries `geojson` and a complete `style`, including the
+    // extrusion fields, so the renderer draws the same layer from the store.
+    // `nativeLayerIds: []` is the host-created-source half of the
+    // registerExternalNativeLayer contract.
+    if (!this._hasStyleLayerApi()) {
+      return this._registerStyledGeoJsonImpactLayer(options, [], undefined)
+        ? options.id
+        : undefined;
+    }
     map.addSource(sourceId, {
       type: "geojson",
       data: options.data as never,
@@ -3531,12 +3570,42 @@ export class OperaControl implements IControl {
         },
       });
     }
-    this._registerLayer({
+    this._registerStyledGeoJsonImpactLayer(options, nativeLayerIds, sourceId);
+    return options.id;
+  }
+
+  /**
+   * Mirror a styled impact layer into the host's layer panel.
+   *
+   * Pass the ids of layers this control drew itself to hand the host adoption
+   * of them; pass an empty list and no source id to ask the host to build the
+   * source from `geojson` and `style` instead. The second form is what the
+   * Cesium globe needs, and it is the only form that survives a renderer swap,
+   * because the store record carries everything required to redraw.
+   */
+  private _registerStyledGeoJsonImpactLayer(
+    options: {
+      id: string;
+      name: string;
+      data: GeoFeatureCollection;
+      geometry: "fill" | "line" | "point" | "extrusion";
+      color: string;
+      opacity: number;
+      strokeColor?: string;
+      strokeWidth: number;
+      sourceKind?: string;
+      extrusionHeightProperty?: string;
+    },
+    nativeLayerIds: string[],
+    sourceId: string | undefined,
+  ): boolean {
+    return this._registerLayer({
       id: options.id,
       name: options.name,
       type: "geojson",
       nativeLayerIds,
-      sourceIds: [sourceId],
+      ...(sourceId ? { sourceIds: [sourceId] } : {}),
+      source: { type: "geojson" },
       geojson: options.data,
       opacity: 1,
       style: {
@@ -3565,7 +3634,6 @@ export class OperaControl implements IControl {
         interactive: true,
       },
     });
-    return options.id;
   }
 
   private _addWorldPopLayer(
@@ -3581,7 +3649,11 @@ export class OperaControl implements IControl {
     const layerId = `${id}-raster`;
     this._removeManagedMapLayer(id, [layerId], sourceId);
     const [west, south, east, north] = bbox;
-    map.addSource(sourceId, {
+    // A georeferenced image with explicit corners. The host renders it from
+    // the source descriptor alone on any engine that knows the `image` type
+    // (the globe draws it through a single-tile imagery provider), so only the
+    // Style Spec path needs a source and layer of our own.
+    const source = {
       type: "image",
       url: imageUrl,
       coordinates: [
@@ -3590,26 +3662,31 @@ export class OperaControl implements IControl {
         [east, south],
         [west, south],
       ],
-    });
-    const beforeId = this._bottomOvertureLayerId();
-    map.addLayer(
-      {
-        id: layerId,
-        type: "raster",
-        source: sourceId,
-        paint: {
-          "raster-opacity": 0.55,
-          "raster-resampling": "linear",
+    };
+    const styleLayers = this._hasStyleLayerApi();
+    const beforeId = styleLayers ? this._bottomOvertureLayerId() : undefined;
+    if (styleLayers) {
+      map.addSource(sourceId, source as never);
+      map.addLayer(
+        {
+          id: layerId,
+          type: "raster",
+          source: sourceId,
+          paint: {
+            "raster-opacity": 0.55,
+            "raster-resampling": "linear",
+          },
         },
-      },
-      beforeId,
-    );
+        beforeId,
+      );
+    }
     this._registerLayer({
       id,
       name: `WorldPop ${year} population - ${eventName}`,
-      type: "raster",
-      nativeLayerIds: [layerId],
-      sourceIds: [sourceId],
+      type: "image",
+      source,
+      nativeLayerIds: styleLayers ? [layerId] : [],
+      ...(styleLayers ? { sourceIds: [sourceId] } : {}),
       beforeId,
       opacity: 0.55,
       metadata: {
@@ -3624,7 +3701,11 @@ export class OperaControl implements IControl {
 
   /** Prefer the basemap airport layer, then fall back to its lowest vector. */
   private _imageryInsertionLayerId(): string | undefined {
-    const layers = this._map?.getStyle().layers ?? [];
+    // `getStyle` throws on a renderer with no style layers, and there is no
+    // flat layer list to insert into there — the store's own order decides.
+    const layers = this._hasStyleLayerApi()
+      ? (this._map?.getStyle().layers ?? [])
+      : [];
     const airportLayer = layers.find(
       (layer) => layer.id.toLowerCase() === "airport",
     );
@@ -3642,7 +3723,9 @@ export class OperaControl implements IControl {
 
   private _bottomOvertureLayerId(): string | undefined {
     const map = this._map;
-    if (!map) return undefined;
+    // No style layers means no native ids to sequence against; the callers all
+    // treat undefined as "leave the order alone".
+    if (!map || !this._hasStyleLayerApi()) return undefined;
     return [
       "opera-context-overture-buildings-extrusion",
       "opera-context-overture-road-line",
@@ -3760,14 +3843,18 @@ export class OperaControl implements IControl {
       this._granules = result.granules;
       this._renderResults();
 
-      if (
-        opts.addFootprints !== false &&
-        result.featureCollection.features.length > 0
-      ) {
-        this._options.addGeoJsonLayer?.(
-          `OPERA ${product.shortTitle} Footprints (${result.granules.length})`,
-          result.featureCollection,
-        );
+      if (opts.addFootprints !== false) {
+        if (result.featureCollection.features.length > 0) {
+          this._addFootprintsLayer(
+            `OPERA ${product.shortTitle} Footprints (${result.granules.length})`,
+            result.featureCollection,
+          );
+        } else {
+          // The store path reuses one layer id, so a search that finds nothing
+          // would otherwise leave the previous search's footprints on the map,
+          // outliving the results table they belong to and unselectable.
+          this._removeFootprintsStoreLayer();
+        }
       }
       if (opts.fitBounds !== false && result.bounds) {
         this._options.fitBounds?.(result.bounds);
@@ -3783,6 +3870,70 @@ export class OperaControl implements IControl {
         `Search failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Add the granule footprints as a layer.
+   *
+   * Where ground-draped vectors paint over rasters (see
+   * {@link _vectorsOccludeRasters}) the footprints are registered with an
+   * explicit translucent fill instead of going through the host's default
+   * GeoJSON styling, because an opaque footprint grid hides every raster the
+   * user displays underneath it. Elsewhere the host's own styling stands and
+   * the Layers panel order does the work.
+   */
+  private _addFootprintsLayer(
+    name: string,
+    data: { type: "FeatureCollection"; features: unknown[] },
+  ): void {
+    if (!this._vectorsOccludeRasters()) {
+      this._options.addGeoJsonLayer?.(name, data);
+      return;
+    }
+    this._registerLayer({
+      id: FOOTPRINTS_STORE_LAYER,
+      name,
+      type: "geojson",
+      source: { type: "geojson" },
+      nativeLayerIds: [],
+      geojson: data as GeoFeatureCollection,
+      opacity: 1,
+      style: {
+        fillColor: "#3b82f6",
+        // Low enough that a displayed raster reads through the grid. The
+        // outline would carry the shape instead, but Cesium drops outlines on
+        // terrain-clamped geometry, so the fill is all there is.
+        fillOpacity: 0.12,
+        strokeColor: "#3b82f6",
+        strokeWidth: 1,
+      },
+      metadata: { sourceKind: "opera-granule-footprints" },
+    });
+  }
+
+  /**
+   * Whether ground-draped vector layers paint over raster layers whatever the
+   * store order says.
+   *
+   * True on the globe: Cesium renders terrain-clamped GeoJSON as ground
+   * primitives, a stage that draws after every imagery layer, so a raster can
+   * never be shown above a footprint however the Layers panel is ordered.
+   */
+  private _vectorsOccludeRasters(): boolean {
+    return !this._hasStyleLayerApi();
+  }
+
+  /** Drop the footprints store layer, if this control registered one. */
+  private _removeFootprintsStoreLayer(): void {
+    if (!this._registeredLayerIds.includes(FOOTPRINTS_STORE_LAYER)) return;
+    try {
+      this._options.unregisterLayer?.(FOOTPRINTS_STORE_LAYER);
+    } catch {
+      // The host may already have dropped it; nothing else to undo.
+    }
+    this._registeredLayerIds = this._registeredLayerIds.filter(
+      (id) => id !== FOOTPRINTS_STORE_LAYER,
+    );
   }
 
   private async _onDisplay(
@@ -4081,7 +4232,9 @@ export class OperaControl implements IControl {
 
   private _ensureHighlightLayers(): void {
     const map = this._map;
-    if (!map) return;
+    // On the globe the highlight is a store layer written by
+    // _highlightSelectedFootprints, so there is nothing to pre-create here.
+    if (!map || !this._hasStyleLayerApi()) return;
     if (!map.getSource(HL_SRC)) {
       map.addSource(HL_SRC, { type: "geojson", data: this._highlightData([]) });
     }
@@ -4106,7 +4259,6 @@ export class OperaControl implements IControl {
   private _highlightSelectedFootprints(): void {
     const map = this._map;
     if (!map) return;
-    this._ensureHighlightLayers();
     const features = this._granules
       .filter((g) => this._selectedIds.has(g.id) && g.geometry)
       .map((g) => ({
@@ -4114,6 +4266,11 @@ export class OperaControl implements IControl {
         geometry: g.geometry,
         properties: {},
       }));
+    if (!this._hasStyleLayerApi()) {
+      this._syncHighlightStoreLayer(features);
+      return;
+    }
+    this._ensureHighlightLayers();
     const src = map.getSource(HL_SRC) as GeoJSONSource | undefined;
     src?.setData(this._highlightData(features));
     // Keep the highlight above later-added layers (e.g. a displayed COG).
@@ -4121,14 +4278,68 @@ export class OperaControl implements IControl {
     if (map.getLayer(HL_LINE)) map.moveLayer(HL_LINE);
   }
 
+  /**
+   * Draw the footprint highlight as a host store layer.
+   *
+   * The globe has no style layers to own, so the highlight becomes a real
+   * layer the host draws and lists. Re-registering the same id updates it in
+   * place; an empty selection unregisters it rather than leaving an empty
+   * layer sitting in the panel. Unlike the MapLibre overlay this one is
+   * visible in the Layers panel, which is the honest cost of having the
+   * renderer draw it.
+   */
+  private _syncHighlightStoreLayer(features: unknown[]): void {
+    if (features.length === 0) {
+      this._removeHighlightStoreLayer();
+      return;
+    }
+    this._registerLayer({
+      id: HL_STORE_LAYER,
+      name: "Selected footprints",
+      type: "geojson",
+      source: { type: "geojson" },
+      nativeLayerIds: [],
+      geojson: this._highlightData(features) as GeoFeatureCollection,
+      opacity: 1,
+      style: {
+        fillColor: "#ffd400",
+        // Carries the highlight on its own here. Cesium drops polygon outlines
+        // on geometry clamped to terrain ("Entity geometry outlines are
+        // unsupported on terrain"), so the 3px stroke the MapLibre overlay
+        // leans on never draws and a 0.12 fill alone reads as nothing.
+        fillOpacity: 0.4,
+        strokeColor: "#ffd400",
+        strokeWidth: 3,
+      },
+      metadata: { sourceKind: "opera-footprint-highlight" },
+    });
+  }
+
+  private _removeHighlightStoreLayer(): void {
+    if (!this._registeredLayerIds.includes(HL_STORE_LAYER)) return;
+    try {
+      this._options.unregisterLayer?.(HL_STORE_LAYER);
+    } catch {
+      // The host may already have dropped it; nothing else to undo.
+    }
+    this._registeredLayerIds = this._registeredLayerIds.filter(
+      (id) => id !== HL_STORE_LAYER,
+    );
+  }
+
   private _clearHighlight(): void {
+    if (!this._hasStyleLayerApi()) {
+      this._removeHighlightStoreLayer();
+      return;
+    }
     const src = this._map?.getSource(HL_SRC) as GeoJSONSource | undefined;
     src?.setData(this._highlightData([]));
   }
 
   private _removeHighlightLayers(): void {
+    this._removeHighlightStoreLayer();
     const map = this._map;
-    if (!map) return;
+    if (!map || !this._hasStyleLayerApi()) return;
     for (const id of [HL_FILL, HL_LINE]) {
       if (map.getLayer(id)) map.removeLayer(id);
     }
@@ -4151,6 +4362,30 @@ export class OperaControl implements IControl {
     const map = this._map;
     if (!map) return;
     const data = this._agentAoiData(bbox);
+    if (!this._hasStyleLayerApi()) {
+      // No style layers to own: register the AOI rectangle as a store layer
+      // and let the renderer draw it. Re-registering the same id moves the
+      // box when the agent redraws the AOI. The dashed outline is a Style
+      // Spec paint property with no store equivalent, so the globe shows a
+      // solid one.
+      this._registerLayer({
+        id: AGENT_AOI_STORE_LAYER,
+        name: "Agent AOI",
+        type: "geojson",
+        source: { type: "geojson" },
+        nativeLayerIds: [],
+        geojson: data as GeoFeatureCollection,
+        opacity: 1,
+        style: {
+          fillColor: "#0891b2",
+          fillOpacity: 0.08,
+          strokeColor: "#0891b2",
+          strokeWidth: 2.5,
+        },
+        metadata: { sourceKind: "opera-agent-aoi" },
+      });
+      return;
+    }
     const source = map.getSource(AGENT_AOI_SRC) as GeoJSONSource | undefined;
     if (source) {
       source.setData(data);
@@ -4182,8 +4417,18 @@ export class OperaControl implements IControl {
   }
 
   private _removeAgentAoiLayers(): void {
+    if (this._registeredLayerIds.includes(AGENT_AOI_STORE_LAYER)) {
+      try {
+        this._options.unregisterLayer?.(AGENT_AOI_STORE_LAYER);
+      } catch {
+        // The host may already have dropped it; nothing else to undo.
+      }
+      this._registeredLayerIds = this._registeredLayerIds.filter(
+        (id) => id !== AGENT_AOI_STORE_LAYER,
+      );
+    }
     const map = this._map;
-    if (!map) return;
+    if (!map || !this._hasStyleLayerApi()) return;
     for (const id of [AGENT_AOI_LINE, AGENT_AOI_FILL]) {
       if (map.getLayer(id)) map.removeLayer(id);
     }
@@ -4201,12 +4446,7 @@ export class OperaControl implements IControl {
       void this._inspectAt({ lng: e.lngLat.lng, lat: e.lngLat.lat });
       return;
     }
-    const hit = map
-      .queryRenderedFeatures(e.point)
-      .find((f) => f.properties && f.properties._operaGranuleId);
-    if (!hit) return;
-    const id = String(hit.properties!._operaGranuleId);
-    const granule = this._granules.find((g) => g.id === id);
+    const granule = this._granuleAtPoint(e);
     if (!granule) return;
     const oe = e.originalEvent as MouseEvent | undefined;
     this.expand();
@@ -4224,11 +4464,38 @@ export class OperaControl implements IControl {
       map.getCanvas().style.cursor = "crosshair";
       return;
     }
-    const over = map
-      .queryRenderedFeatures(e.point)
-      .some((f) => f.properties && f.properties._operaGranuleId);
-    map.getCanvas().style.cursor = over ? "pointer" : "";
+    map.getCanvas().style.cursor = this._granuleAtPoint(e) ? "pointer" : "";
   };
+
+  /**
+   * The granule whose footprint covers a pointer event, or undefined.
+   *
+   * Asks the renderer when it can pick, so layer order and visibility decide
+   * the hit the way the user sees them. The Cesium facade has no
+   * `queryRenderedFeatures`, so fall back to a geometric test over the
+   * granules already in memory — the footprints the results table lists are
+   * exactly the ones drawn, so the two agree. Search backwards so a later
+   * granule wins, matching the renderer's topmost-first order.
+   */
+  private _granuleAtPoint(e: MapMouseEvent): OperaGranule | undefined {
+    const map = this._map;
+    if (!map) return undefined;
+    if (typeof map.queryRenderedFeatures === "function") {
+      const hit = map
+        .queryRenderedFeatures(e.point)
+        .find((f) => f.properties && f.properties._operaGranuleId);
+      if (!hit) return undefined;
+      const id = String(hit.properties!._operaGranuleId);
+      return this._granules.find((g) => g.id === id);
+    }
+    const point: Position = [e.lngLat.lng, e.lngLat.lat];
+    for (let index = this._granules.length - 1; index >= 0; index -= 1) {
+      const granule = this._granules[index];
+      const geometry = granule.geometry as AreaGeometry | undefined;
+      if (geometry && pointInGeometry(point, geometry)) return granule;
+    }
+    return undefined;
+  }
 
   // --- Bbox draw on map -------------------------------------------------
 
@@ -4237,9 +4504,34 @@ export class OperaControl implements IControl {
     else this._startDraw();
   }
 
+  /**
+   * Whether the map exposes the interaction handlers rubber-band drawing needs.
+   *
+   * `dragPan` / `boxZoom` / `doubleClickZoom` are MapLibre handler objects; the
+   * globe's control facade has none of them.
+   */
+  private _canDrawOnMap(): boolean {
+    const map = this._map as Partial<MapLibreMap> | undefined;
+    return (
+      typeof map?.dragPan?.disable === "function" &&
+      typeof map?.boxZoom?.disable === "function" &&
+      typeof map?.doubleClickZoom?.disable === "function"
+    );
+  }
+
   private _startDraw(): void {
     const map = this._map;
     if (!map) return;
+    // Rubber-band drawing suspends the map's own drag/zoom handlers and sizes
+    // a div from screen pixels. The Cesium facade exposes no handler
+    // subsystems (the globe has its own drawing interactions the plugin API
+    // does not reach), so refuse with a reason rather than throwing.
+    if (!this._canDrawOnMap()) {
+      this._setStatus(
+        "Drawing on the map is not available on this renderer. Type a bounding box or use the map extent instead.",
+      );
+      return;
+    }
     this._stopInspect();
     this._drawing = true;
     if (this._drawBtn) this._drawBtn.textContent = "Cancel";
@@ -4264,9 +4556,13 @@ export class OperaControl implements IControl {
       map.getCanvas().style.cursor = "";
       map.off("mousedown", this._onDrawDown);
       map.off("mousemove", this._onDrawMove);
-      map.dragPan.enable();
-      map.boxZoom.enable();
-      map.doubleClickZoom.enable();
+      // Teardown calls this even when drawing never started, so re-enable only
+      // the handlers that exist (see _canDrawOnMap).
+      if (this._canDrawOnMap()) {
+        map.dragPan.enable();
+        map.boxZoom.enable();
+        map.doubleClickZoom.enable();
+      }
     }
   }
 

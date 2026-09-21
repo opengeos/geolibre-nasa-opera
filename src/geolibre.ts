@@ -5,6 +5,7 @@ import {
 } from "maplibre-gl-geoagent";
 import type { Model } from "@strands-agents/sdk";
 import { OperaControl, type OperaState } from "./lib/core/OperaControl";
+import type { Map as MapLibreMap } from "maplibre-gl";
 import type {
   GeoLibreAppAPI,
   GeoLibreControl,
@@ -347,8 +348,29 @@ function companionPosition(
   }
 }
 
-/** Read the current map extent as a `[w, s, e, n]` box, or null. */
+/**
+ * Read the current map extent as a `[w, s, e, n]` box, or null.
+ *
+ * Goes through the host's renderer-neutral `getViewBounds` rather than
+ * `getMap()?.getBounds()`: `getMap()` is null on the Cesium globe and on
+ * Mapbox, so the old form returned no bounds there and "Use map extent"
+ * silently searched the whole world. Older hosts without `getViewBounds` keep
+ * working through the MapLibre fallback.
+ *
+ * Callers must treat `null` as "extent unavailable" and refuse, not as "no
+ * filter" — widening the search is the same lie in a second place.
+ */
 function readMapBounds(app: AppAPI): BBox | null {
+  // A host that offers getViewBounds is authoritative, including when it
+  // answers null: that means "extent unavailable", not "ask somewhere else".
+  // Falling through to getMap here would resurrect the whole-world search on
+  // the one renderer where getMap still happens to hand back a usable map.
+  if (app.getViewBounds) {
+    const viewBounds = app.getViewBounds();
+    return viewBounds ? ([...viewBounds] as BBox) : null;
+  }
+  // engine-audit-allow: getMap-bounds - fallback for hosts predating
+  // getViewBounds; yields null on a non-MapLibre renderer, which is honest.
   const map = app.getMap?.();
   if (!map) return null;
   const b = map.getBounds();
@@ -439,12 +461,63 @@ function mountGeoAgent(app: AppAPI, pos: GeoLibreMapControlPosition): boolean {
 }
 
 /**
+ * A do-nothing map control whose only job is to receive the map handle.
+ *
+ * The host passes a map to `IControl.onAdd` and nowhere else, so this is how a
+ * docked panel reaches one on a renderer where `app.getMap()` is null. It
+ * renders an empty hidden element, so it occupies no corner space and draws
+ * nothing.
+ */
+class MapHandleProbe implements GeoLibreControl {
+  private readonly element = document.createElement("div");
+
+  constructor(private readonly onMap: (map: MapLibreMap) => void) {
+    this.element.style.display = "none";
+  }
+
+  onAdd(map: MapLibreMap): HTMLElement {
+    this.onMap(map);
+    return this.element;
+  }
+
+  onRemove(): void {
+    this.element.remove();
+  }
+}
+
+/**
+ * Add a hidden probe control to read the map handle back out, removing it again
+ * once captured. Returns undefined when the host refuses the control, which is
+ * the caller's signal to fall back to a floating panel.
+ */
+function captureMapHandle(app: AppAPI): MapLibreMap | undefined {
+  let captured: MapLibreMap | undefined;
+  const probe = new MapHandleProbe((map) => {
+    captured = map;
+  });
+  // `onAdd` runs synchronously inside addMapControl on both the MapLibre map
+  // and the globe's control host, so `captured` is set by the time this
+  // returns.
+  const added = app.addMapControl(probe, position);
+  if (added) app.removeMapControl(probe);
+  return captured;
+}
+
+/**
  * Mount the OPERA search UI as a host-managed docked right panel. Falls back to
- * floating when the host lacks a right sidebar or a map is not yet available.
+ * floating when the host lacks a right sidebar or no map can be reached.
  */
 function mountDocked(app: AppAPI): boolean {
-  const map = app.getMap?.();
-  if (!app.registerRightPanel || !map) return mountFloating(app);
+  if (!app.registerRightPanel) return mountFloating(app);
+
+  // `registerRightPanel` hands the panel no map, and `getMap()` answers null on
+  // every renderer but MapLibre — which used to drop the globe to a floating
+  // panel. `addMapControl` is the one door that hands out a map (the MapLibre
+  // map, or the globe's MapLibre-shaped facade), so mount a hidden probe
+  // through it purely to capture the handle the docked panel needs for
+  // footprint picking, inspect and popups.
+  const map = app.getMap?.() ?? captureMapHandle(app);
+  if (!map) return mountFloating(app);
 
   operaControl = operaControl ?? createControl(app);
   const control = operaControl;
@@ -605,6 +678,7 @@ export const plugin: GeoLibrePlugin<GeoLibreControl> = {
   id: "geolibre-nasa-opera",
   name: "NASA OPERA",
   version: "0.3.1",
+  engines: ["maplibre", "cesium"],
   restoresPanelCollapseState: true,
   activate(app) {
     if (!mountOpera(app)) return false;
