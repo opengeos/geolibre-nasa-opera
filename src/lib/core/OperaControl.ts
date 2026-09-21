@@ -3423,11 +3423,28 @@ export class OperaControl implements IControl {
     this._registeredLayerIds = this._registeredLayerIds.filter(
       (registeredId) => registeredId !== id,
     );
-    if (!this._map) return;
+    const map = this._map;
+    if (!map || !this._hasStyleLayerApi()) return;
     for (const layerId of [...nativeLayerIds].reverse()) {
-      if (this._map.getLayer(layerId)) this._map.removeLayer(layerId);
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
     }
-    if (this._map.getSource(sourceId)) this._map.removeSource(sourceId);
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+  }
+
+  /**
+   * Whether the map this control was handed can paint Mapbox Style Spec layers.
+   *
+   * On the Cesium globe the host mounts MapLibre controls on a facade that
+   * answers the camera, container and event API but throws on `addSource` /
+   * `addLayer` and omits `getLayer` outright. The facade is truthy, so a
+   * `if (!map)` guard does not catch it — probe for `getLayer`, which only a
+   * real Style Spec map has. Same shape as GeoLibre's own `hasStyleLayerApi`.
+   */
+  private _hasStyleLayerApi(): boolean {
+    const map = this._map as Partial<MapLibreMap> | undefined;
+    return (
+      typeof map?.getLayer === "function" && typeof map?.addLayer === "function"
+    );
   }
 
   private _addStyledGeoJsonImpactLayer(options: {
@@ -3465,6 +3482,17 @@ export class OperaControl implements IControl {
       [...nativeLayerIds, ...obsoleteLayerIds],
       sourceId,
     );
+    // Without a Style Spec map (the Cesium globe), hand the host the data and
+    // the styling hints and let it own the source: the registration below
+    // already carries `geojson` and a complete `style`, including the
+    // extrusion fields, so the renderer draws the same layer from the store.
+    // `nativeLayerIds: []` is the host-created-source half of the
+    // registerExternalNativeLayer contract.
+    if (!this._hasStyleLayerApi()) {
+      return this._registerStyledGeoJsonImpactLayer(options, [], undefined)
+        ? options.id
+        : undefined;
+    }
     map.addSource(sourceId, {
       type: "geojson",
       data: options.data as never,
@@ -3531,12 +3559,42 @@ export class OperaControl implements IControl {
         },
       });
     }
-    this._registerLayer({
+    this._registerStyledGeoJsonImpactLayer(options, nativeLayerIds, sourceId);
+    return options.id;
+  }
+
+  /**
+   * Mirror a styled impact layer into the host's layer panel.
+   *
+   * Pass the ids of layers this control drew itself to hand the host adoption
+   * of them; pass an empty list and no source id to ask the host to build the
+   * source from `geojson` and `style` instead. The second form is what the
+   * Cesium globe needs, and it is the only form that survives a renderer swap,
+   * because the store record carries everything required to redraw.
+   */
+  private _registerStyledGeoJsonImpactLayer(
+    options: {
+      id: string;
+      name: string;
+      data: GeoFeatureCollection;
+      geometry: "fill" | "line" | "point" | "extrusion";
+      color: string;
+      opacity: number;
+      strokeColor?: string;
+      strokeWidth: number;
+      sourceKind?: string;
+      extrusionHeightProperty?: string;
+    },
+    nativeLayerIds: string[],
+    sourceId: string | undefined,
+  ): boolean {
+    return this._registerLayer({
       id: options.id,
       name: options.name,
       type: "geojson",
       nativeLayerIds,
-      sourceIds: [sourceId],
+      ...(sourceId ? { sourceIds: [sourceId] } : {}),
+      source: { type: "geojson" },
       geojson: options.data,
       opacity: 1,
       style: {
@@ -3565,7 +3623,6 @@ export class OperaControl implements IControl {
         interactive: true,
       },
     });
-    return options.id;
   }
 
   private _addWorldPopLayer(
@@ -3581,7 +3638,11 @@ export class OperaControl implements IControl {
     const layerId = `${id}-raster`;
     this._removeManagedMapLayer(id, [layerId], sourceId);
     const [west, south, east, north] = bbox;
-    map.addSource(sourceId, {
+    // A georeferenced image with explicit corners. The host renders it from
+    // the source descriptor alone on any engine that knows the `image` type
+    // (the globe draws it through a single-tile imagery provider), so only the
+    // Style Spec path needs a source and layer of our own.
+    const source = {
       type: "image",
       url: imageUrl,
       coordinates: [
@@ -3590,26 +3651,31 @@ export class OperaControl implements IControl {
         [east, south],
         [west, south],
       ],
-    });
-    const beforeId = this._bottomOvertureLayerId();
-    map.addLayer(
-      {
-        id: layerId,
-        type: "raster",
-        source: sourceId,
-        paint: {
-          "raster-opacity": 0.55,
-          "raster-resampling": "linear",
+    };
+    const styleLayers = this._hasStyleLayerApi();
+    const beforeId = styleLayers ? this._bottomOvertureLayerId() : undefined;
+    if (styleLayers) {
+      map.addSource(sourceId, source as never);
+      map.addLayer(
+        {
+          id: layerId,
+          type: "raster",
+          source: sourceId,
+          paint: {
+            "raster-opacity": 0.55,
+            "raster-resampling": "linear",
+          },
         },
-      },
-      beforeId,
-    );
+        beforeId,
+      );
+    }
     this._registerLayer({
       id,
       name: `WorldPop ${year} population - ${eventName}`,
-      type: "raster",
-      nativeLayerIds: [layerId],
-      sourceIds: [sourceId],
+      type: "image",
+      source,
+      nativeLayerIds: styleLayers ? [layerId] : [],
+      ...(styleLayers ? { sourceIds: [sourceId] } : {}),
       beforeId,
       opacity: 0.55,
       metadata: {

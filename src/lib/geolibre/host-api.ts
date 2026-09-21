@@ -14,6 +14,14 @@
 
 import type { Map as MapLibreMap } from "maplibre-gl";
 
+/**
+ * A GeoLibre rendering engine. `"maplibre"` and `"mapbox"` share the Mapbox
+ * Style Spec surface; `"cesium"` is the 3D globe, whose control facade throws
+ * on `addSource`/`addLayer` and omits `getLayer`/`queryRenderedFeatures`
+ * outright; `"arcgis"` is the ArcGIS Maps SDK renderer.
+ */
+export type GeoLibreMapRenderer = "maplibre" | "mapbox" | "cesium" | "arcgis";
+
 /** Corner of the map a control can be docked to. */
 export type GeoLibreMapControlPosition =
   | "top-left"
@@ -296,7 +304,25 @@ export interface GeoLibreAppAPI<
   removeLayerGroup?: (id: string) => void;
   /** Fit the map view to a `[west, south, east, north]` bounding box. */
   fitBounds?: (bounds: [number, number, number, number]) => void;
-  /** Return the raw MapLibre map instance (e.g. to read the current extent). */
+  /**
+   * The extent the primary map currently shows, `[west, south, east, north]` in
+   * degrees, on whichever renderer is active. The renderer-neutral replacement
+   * for `getMap()?.getBounds()`, which answers nothing on the Cesium globe and
+   * on Mapbox because {@link getMap} is `null` there.
+   *
+   * It has its own `null`: no map mounted yet, the globe mid-morph between
+   * scene modes, or a camera pointed away from Earth. Do not read that as "no
+   * filter" — a search that silently widens to the whole world while the user's
+   * "current view only" box stays ticked is exactly the failure this replaces.
+   * Refuse the search and say the extent is unavailable.
+   */
+  getViewBounds?: () => [number, number, number, number] | null;
+  /** The active primary renderer, including while its canvas is being replaced. */
+  getMapRenderer?: () => GeoLibreMapRenderer;
+  /**
+   * Return the raw MapLibre map instance. `null` on the Cesium globe and on
+   * Mapbox, so never read the viewport through it — use {@link getViewBounds}.
+   */
   getMap?: () => MapLibreMap | null;
   /**
    * Open the host's native directory picker. Present only on hosts that support
@@ -366,6 +392,12 @@ export interface GeoLibrePlugin<
   name: string;
   /** Semantic version; must match `plugin.json`'s `version`. */
   version: string;
+  /**
+   * Renderers this plugin supports. Defaults to `["maplibre"]`, so omitting it
+   * means the host suspends the plugin whenever another renderer is primary and
+   * restores it on the way back. Mirrors `plugin.json`'s `engines`.
+   */
+  engines?: GeoLibreMapRenderer[];
   /**
    * Whether the plugin persists and restores its own panel collapse state.
    * Hosts should not force panels closed during project restoration when true.

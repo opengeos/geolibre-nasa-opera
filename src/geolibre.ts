@@ -347,8 +347,29 @@ function companionPosition(
   }
 }
 
-/** Read the current map extent as a `[w, s, e, n]` box, or null. */
+/**
+ * Read the current map extent as a `[w, s, e, n]` box, or null.
+ *
+ * Goes through the host's renderer-neutral `getViewBounds` rather than
+ * `getMap()?.getBounds()`: `getMap()` is null on the Cesium globe and on
+ * Mapbox, so the old form returned no bounds there and "Use map extent"
+ * silently searched the whole world. Older hosts without `getViewBounds` keep
+ * working through the MapLibre fallback.
+ *
+ * Callers must treat `null` as "extent unavailable" and refuse, not as "no
+ * filter" — widening the search is the same lie in a second place.
+ */
 function readMapBounds(app: AppAPI): BBox | null {
+  // A host that offers getViewBounds is authoritative, including when it
+  // answers null: that means "extent unavailable", not "ask somewhere else".
+  // Falling through to getMap here would resurrect the whole-world search on
+  // the one renderer where getMap still happens to hand back a usable map.
+  if (app.getViewBounds) {
+    const viewBounds = app.getViewBounds();
+    return viewBounds ? ([...viewBounds] as BBox) : null;
+  }
+  // engine-audit-allow: getMap-bounds - fallback for hosts predating
+  // getViewBounds; yields null on a non-MapLibre renderer, which is honest.
   const map = app.getMap?.();
   if (!map) return null;
   const b = map.getBounds();
