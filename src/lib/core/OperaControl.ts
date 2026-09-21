@@ -665,6 +665,7 @@ const AGENT_AOI_LINE = "opera-agent-aoi-line";
 // (the Cesium globe), where the host draws them from the record instead.
 const HL_STORE_LAYER = "opera-footprint-highlight";
 const AGENT_AOI_STORE_LAYER = "opera-agent-aoi";
+const FOOTPRINTS_STORE_LAYER = "opera-granule-footprints";
 
 type BBoxFeature = {
   type: "Feature";
@@ -3846,7 +3847,7 @@ export class OperaControl implements IControl {
         opts.addFootprints !== false &&
         result.featureCollection.features.length > 0
       ) {
-        this._options.addGeoJsonLayer?.(
+        this._addFootprintsLayer(
           `OPERA ${product.shortTitle} Footprints (${result.granules.length})`,
           result.featureCollection,
         );
@@ -3865,6 +3866,57 @@ export class OperaControl implements IControl {
         `Search failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Add the granule footprints as a layer.
+   *
+   * Where ground-draped vectors paint over rasters (see
+   * {@link _vectorsOccludeRasters}) the footprints are registered with an
+   * explicit translucent fill instead of going through the host's default
+   * GeoJSON styling, because an opaque footprint grid hides every raster the
+   * user displays underneath it. Elsewhere the host's own styling stands and
+   * the Layers panel order does the work.
+   */
+  private _addFootprintsLayer(
+    name: string,
+    data: { type: "FeatureCollection"; features: unknown[] },
+  ): void {
+    if (!this._vectorsOccludeRasters()) {
+      this._options.addGeoJsonLayer?.(name, data);
+      return;
+    }
+    this._registerLayer({
+      id: FOOTPRINTS_STORE_LAYER,
+      name,
+      type: "geojson",
+      source: { type: "geojson" },
+      nativeLayerIds: [],
+      geojson: data as GeoFeatureCollection,
+      opacity: 1,
+      style: {
+        fillColor: "#3b82f6",
+        // Low enough that a displayed raster reads through the grid. The
+        // outline would carry the shape instead, but Cesium drops outlines on
+        // terrain-clamped geometry, so the fill is all there is.
+        fillOpacity: 0.12,
+        strokeColor: "#3b82f6",
+        strokeWidth: 1,
+      },
+      metadata: { sourceKind: "opera-granule-footprints" },
+    });
+  }
+
+  /**
+   * Whether ground-draped vector layers paint over raster layers whatever the
+   * store order says.
+   *
+   * True on the globe: Cesium renders terrain-clamped GeoJSON as ground
+   * primitives, a stage that draws after every imagery layer, so a raster can
+   * never be shown above a footprint however the Layers panel is ordered.
+   */
+  private _vectorsOccludeRasters(): boolean {
+    return !this._hasStyleLayerApi();
   }
 
   private async _onDisplay(
