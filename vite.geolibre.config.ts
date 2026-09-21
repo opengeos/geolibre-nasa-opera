@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { bundledSecret } from "./scripts/bundled-secrets.mjs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,16 +60,19 @@ export default defineConfig({
       "@": resolve(__dirname, "src"),
     },
   },
-  // Optionally bundle the OpenAI key from the build environment so end users of
-  // the shipped GeoLibre plugin do not have to enter one. OPT-IN: only set when
-  // OPENAI_API_KEY is exported at build time; default OFF. Bundling exposes the
-  // key to anyone who loads the app, so use only for controlled/sponsor demos.
-  // See src/vite-env.d.ts and src/geolibre.ts.
+  // Optionally bundle the OpenAI / CLIProxyAPI keys so end users of a
+  // controlled demo build do not have to enter one. Gated behind
+  // OPERA_BUNDLE_KEYS=1: an exported OPENAI_API_KEY or CLI_PROXY_API_KEY is NOT
+  // enough on its own, because both are routinely exported in a developer's
+  // shell and an ordinary build then ships a live credential to every browser
+  // that loads the app. A build that opts in must not be published.
+  // See scripts/bundled-secrets.mjs, src/vite-env.d.ts and src/geolibre.ts.
   define: {
-    __OPERA_OPENAI_API_KEY__: JSON.stringify(process.env.OPENAI_API_KEY ?? ""),
+    __OPERA_OPENAI_API_KEY__: JSON.stringify(bundledSecret("OPENAI_API_KEY")),
     __OPERA_CLI_PROXY_API_KEY__: JSON.stringify(
-      process.env.CLI_PROXY_API_KEY ?? "",
+      bundledSecret("CLI_PROXY_API_KEY"),
     ),
+    // Not a secret: an endpoint, safe to bundle unconditionally.
     __OPERA_CLI_PROXY_URL__: JSON.stringify(
       process.env.CLI_PROXY_UPSTREAM ?? "https://cli-proxy.opengeos.org",
     ),
