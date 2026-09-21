@@ -4234,7 +4234,11 @@ export class OperaControl implements IControl {
       opacity: 1,
       style: {
         fillColor: "#ffd400",
-        fillOpacity: 0.12,
+        // Carries the highlight on its own here. Cesium drops polygon outlines
+        // on geometry clamped to terrain ("Entity geometry outlines are
+        // unsupported on terrain"), so the 3px stroke the MapLibre overlay
+        // leans on never draws and a 0.12 fill alone reads as nothing.
+        fillOpacity: 0.4,
         strokeColor: "#ffd400",
         strokeWidth: 3,
       },
