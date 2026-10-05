@@ -71,6 +71,13 @@ The plugin only calls `app.addGeoJsonLayer` (footprints) and
 `app.registerExternalNativeLayer` with a `type: "raster"` tile source (COG tiles)
 through the GeoLibre host API, so the layers appear in the normal layer panel.
 
+## Jupyter notebooks
+
+The [`notebooks/`](notebooks/) folder shows the same search and display workflow
+from Python with the [GeoLibre](https://github.com/opengeos/GeoLibre) Jupyter
+widget: searching CMR for granules, rendering OPERA layers through titiler-cmr,
+and measuring flood extent with DSWx-S1.
+
 ## Panel modes
 
 The OPERA search UI can render in one of two modes, switchable at runtime from
