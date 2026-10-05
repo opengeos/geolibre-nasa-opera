@@ -17,16 +17,6 @@ Valencia, Spain, around the 29 October 2024 DANA flood.
 | [Visualize OPERA layers](02_visualize_opera_layers.md) | DSWx-HLS, DSWx-S1, RTC-S1 (dB), DIST-ALERT, and DEM layers with colormaps, legends, and a swipe |
 | [Map a flood with DSWx-S1](03_flood_mapping_dswx.md) | Before/after swipe and open-water area over time |
 
-RTC-S1 backscatter (left) and the DSWx-S1 water map derived from it (right),
-south of Valencia on 31 October 2024, from the visualization notebook:
-
-![RTC-S1 backscatter on the left and DSWx-S1 water on the right, south of Valencia on 31 October 2024](../assets/notebooks/flood-swipe.webp)
-
-Open water in the study area nearly doubles after the flood, from the
-flood-mapping notebook:
-
-![DSWx-S1 open-water area from 20 October to 7 November 2024](../assets/notebooks/water-area-chart.webp)
-
 ## Run them
 
 ```bash

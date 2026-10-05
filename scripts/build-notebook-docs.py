@@ -43,7 +43,9 @@ def render_outputs(outputs):
     for output in outputs:
         data = output.get("data", {})
         if "image/png" in data:
-            blocks.append(f"![output](data:image/png;base64,{data['image/png'].strip()})")
+            blocks.append(
+                f"![output](data:image/png;base64,{data['image/png'].strip()})"
+            )
             continue
         text = output.get("text") or data.get("text/plain")
         if text:
