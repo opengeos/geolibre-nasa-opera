@@ -48,6 +48,9 @@ jobs:
         env:
           PAGES_BASE: /demo/
 
+      - name: Convert notebooks to docs pages
+        run: python scripts/build-notebook-docs.py
+
       - name: Build documentation site
         run: zensical build --clean --strict
 

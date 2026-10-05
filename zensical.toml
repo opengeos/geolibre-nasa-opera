@@ -23,6 +23,12 @@ nav = [
   { "Products" = "products.md" },
   { "GeoAgent" = "geoagent.md" },
   { "Disaster workflows" = "disaster-workflow.md" },
+  { "Notebooks" = [
+    "notebooks/index.md",
+    { "Search OPERA granules" = "notebooks/01_search_opera_granules.md" },
+    { "Visualize OPERA layers" = "notebooks/02_visualize_opera_layers.md" },
+    { "Map a flood with DSWx-S1" = "notebooks/03_flood_mapping_dswx.md" },
+  ] },
   { "Install" = "install.md" },
   { "Slides" = "slides.md" },
 ]
