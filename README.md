@@ -71,6 +71,16 @@ The plugin only calls `app.addGeoJsonLayer` (footprints) and
 `app.registerExternalNativeLayer` with a `type: "raster"` tile source (COG tiles)
 through the GeoLibre host API, so the layers appear in the normal layer panel.
 
+## Gallery
+
+The [gallery](https://opera-plugin.geolibre.app/gallery/) has 18 live GeoLibre
+maps of OPERA products, from the Kakhovka dam breach and Tulare Lake in 2023 to
+the 2026 floods in Mozambique and Thailand: before-and-after water swipes, fire
+scars, SAR backscatter, DISP-S1 subsidence, and a global DSWx-HLS coverage map.
+[`gallery/build_projects.py`](gallery/build_projects.py) builds the projects and
+[`gallery/gallery.json`](gallery/gallery.json) drives the page
+(`python scripts/build-gallery-docs.py`).
+
 ## Jupyter notebooks
 
 The [`notebooks/`](notebooks/) folder shows the same search and display workflow
