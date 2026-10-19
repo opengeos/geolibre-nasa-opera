@@ -237,13 +237,17 @@ def water_legend(sentinel1=False):
     )
 
 
+# Every VEG-DIST-STATUS class in the GIBS DIST-ALERT color index.
 DIST_LEGEND = items(
     {
-        "Confirmed, 50% or more loss": "#e01b07",
-        "Confirmed, under 50% loss": "#dee043",
+        "First detection, under 50%": "#005555",
+        "Provisional, under 50%": "#897f4e",
+        "Confirmed, under 50%": "#dee043",
+        "First detection, 50% or more": "#008888",
         "Provisional, 50% or more": "#e48727",
-        "First detection": "#008888",
-        "Finished": "#dddddd",
+        "Confirmed, 50% or more": "#e01b07",
+        "Finished, under 50%": "#777777",
+        "Finished, 50% or more": "#dddddd",
     }
 )
 
