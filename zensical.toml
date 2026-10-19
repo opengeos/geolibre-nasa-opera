@@ -23,6 +23,7 @@ nav = [
   { "Products" = "products.md" },
   { "GeoAgent" = "geoagent.md" },
   { "Disaster workflows" = "disaster-workflow.md" },
+  { "Gallery" = "gallery.md" },
   { "Notebooks" = [
     "notebooks/index.md",
     { "Search OPERA granules" = "notebooks/01_search_opera_granules.md" },

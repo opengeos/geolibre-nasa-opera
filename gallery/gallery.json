@@ -1,0 +1,158 @@
+{
+  "$comment": "Source of truth for docs/gallery.md. Edit here, then run: python scripts/build-gallery-docs.py",
+  "owner": "giswqs",
+  "collection": "https://share.geolibre.app/giswqs/collections/nasa-opera-gallery",
+  "assets": "https://assets.geolibre.app/opera",
+  "themes": [
+    { "tag": "water", "title": "Floods and surface water" },
+    { "tag": "disturbance", "title": "Fires and vegetation disturbance" },
+    { "tag": "ground-motion", "title": "Ground motion" },
+    { "tag": "radar", "title": "Radar and coverage" }
+  ],
+  "projects": [
+    {
+      "slug": "thailand-floods-october-2026",
+      "title": "Thailand floods, October 2026",
+      "theme": "water",
+      "date": "Oct 2026",
+      "caption": "Swipe radar water maps of Prachin Buri before and after weeks of monsoon rain",
+      "product": "DSWx-S1"
+    },
+    {
+      "slug": "mozambique-floods-january-2026",
+      "title": "Mozambique floods, January 2026",
+      "theme": "water",
+      "date": "Jan 2026",
+      "caption": "Swipe radar water maps as the lower Limpopo valley floods",
+      "product": "DSWx-S1"
+    },
+    {
+      "slug": "punjab-floods-august-2025",
+      "title": "Punjab floods, August 2025",
+      "theme": "water",
+      "date": "Aug 2025",
+      "caption": "Swipe the Ravi, Sutlej and Chenab rivers before and during the monsoon floods",
+      "product": "DSWx-S1"
+    },
+    {
+      "slug": "valencia-floods-october-2024",
+      "title": "Valencia floods, October 2024",
+      "theme": "water",
+      "date": "Oct 2024",
+      "caption": "Swipe radar water maps from before and after the October 2024 flash floods",
+      "product": "DSWx-S1"
+    },
+    {
+      "slug": "amazon-river-water-extent-2024",
+      "title": "Amazon river water extent 2024",
+      "theme": "water",
+      "date": "Sep 2024",
+      "caption": "30 m surface water along the Amazon and its tributaries in 2024",
+      "product": "DSWx-HLS"
+    },
+    {
+      "slug": "thessaly-floods-september-2023",
+      "title": "Thessaly floods, September 2023",
+      "theme": "water",
+      "date": "Sep 2023",
+      "caption": "Swipe the Thessaly plain before and after Storm Daniel refilled Lake Karla",
+      "product": "DSWx-HLS"
+    },
+    {
+      "slug": "tulare-lake-returns-2023",
+      "title": "Tulare Lake returns, 2023",
+      "theme": "water",
+      "date": "Jun 2023",
+      "caption": "Swipe the lake that refilled in 2023 against farmland a year later",
+      "product": "DSWx-HLS"
+    },
+    {
+      "slug": "kakhovka-reservoir-drains-2023",
+      "title": "Kakhovka reservoir drains, 2023",
+      "theme": "water",
+      "date": "Jun 2023",
+      "caption": "Swipe the reservoir the day before the dam breach and a month after",
+      "product": "DSWx-HLS"
+    },
+    {
+      "slug": "northwestern-ontario-wildfires-2026",
+      "title": "Northwestern Ontario wildfires, 2026",
+      "theme": "disturbance",
+      "date": "Oct 2026",
+      "caption": "Burn scars of Ontario's record 2026 fire season over satellite imagery",
+      "product": "DIST-ALERT"
+    },
+    {
+      "slug": "los-angeles-fire-scars-january-2025",
+      "title": "Los Angeles fire scars, January 2025",
+      "theme": "disturbance",
+      "date": "Jan 2025",
+      "caption": "Swipe vegetation disturbance before and after the Palisades fire",
+      "product": "DIST-ALERT"
+    },
+    {
+      "slug": "park-fire-california-2024",
+      "title": "Park Fire, California 2024",
+      "theme": "disturbance",
+      "date": "Aug 2024",
+      "caption": "Vegetation loss across California's fourth-largest wildfire",
+      "product": "DIST-ALERT"
+    },
+    {
+      "slug": "jasper-wildfire-2024",
+      "title": "Jasper wildfire, 2024",
+      "theme": "disturbance",
+      "date": "Aug 2024",
+      "caption": "Confirmed vegetation loss around the town of Jasper a month after the fire",
+      "product": "DIST-ALERT"
+    },
+    {
+      "slug": "canada-wildfire-season-2023",
+      "title": "Canada wildfire season 2023",
+      "theme": "disturbance",
+      "date": "2023",
+      "caption": "Burn scars of the 2023 season across Quebec, Alberta and the north",
+      "product": "DIST-ANN"
+    },
+    {
+      "slug": "mexico-city-sinking",
+      "title": "Mexico City sinking",
+      "theme": "ground-motion",
+      "date": "2023-2025",
+      "caption": "Up to 40 cm of subsidence in 18 months from radar interferometry",
+      "product": "DISP-S1"
+    },
+    {
+      "slug": "san-joaquin-valley-sinking-2022",
+      "title": "San Joaquin Valley sinking, 2022",
+      "theme": "ground-motion",
+      "date": "May-Nov 2022",
+      "caption": "Over 15 cm of ground motion in six months of drought-year pumping",
+      "product": "DISP-S1"
+    },
+    {
+      "slug": "columbia-basin-crop-circles-in-radar",
+      "title": "Columbia Basin crop circles in radar",
+      "theme": "radar",
+      "date": "Jul 2025",
+      "caption": "Center-pivot fields light up in false-color Sentinel-1 backscatter",
+      "product": "RTC-S1"
+    },
+    {
+      "slug": "alps-seen-by-sentinel-1-radar",
+      "title": "Alps seen by Sentinel-1 radar",
+      "theme": "radar",
+      "date": "Jan 2026",
+      "caption": "False-color radar backscatter that sees through cloud, lakes in black",
+      "product": "RTC-S1"
+    },
+    {
+      "slug": "how-often-opera-maps-surface-water",
+      "title": "How often OPERA maps surface water",
+      "theme": "radar",
+      "date": "Jul 2025",
+      "caption": "Days with a DSWx-HLS look for every MGRS tile, from 380,000 CMR granules",
+      "product": "DSWx-HLS"
+    }
+  ]
+}
