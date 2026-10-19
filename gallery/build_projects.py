@@ -9,7 +9,7 @@ The coverage map is a vector layer built from a CMR granule count; run
 Run with the GeoLibre Python package installed::
 
     python gallery/build_projects.py            # every project
-    python gallery/build_projects.py kakhovka   # projects whose slug matches
+    python gallery/build_projects.py kakhovka   # builders whose function name matches
 """
 
 import json
@@ -863,6 +863,9 @@ if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     CACHE.mkdir(exist_ok=True)
     wanted = sys.argv[1:]
-    for build in PROJECTS:
-        if not wanted or any(w in build.__name__ for w in wanted):
-            build()
+    builds = [b for b in PROJECTS if not wanted or any(w in b.__name__ for w in wanted)]
+    if not builds:
+        names = ", ".join(b.__name__ for b in PROJECTS)
+        sys.exit(f"no builder matches {' '.join(wanted)!r}; choose from: {names}")
+    for build in builds:
+        build()

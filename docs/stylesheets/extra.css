@@ -170,7 +170,7 @@
 
 .md-typeset .frame {
   position: relative;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 9;
   background: var(--opera-panel);
   border: 1px solid var(--opera-line-strong);
 }
@@ -437,7 +437,7 @@
 
 .md-typeset .slides-frame {
   position: relative;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 9;
   margin: 1.4rem 0 0.6rem;
   border: 1px solid var(--opera-line-strong);
   background: var(--opera-panel);

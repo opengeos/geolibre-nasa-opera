@@ -51,6 +51,9 @@ jobs:
       - name: Convert notebooks to docs pages
         run: python scripts/build-notebook-docs.py
 
+      - name: Check the gallery page is up to date
+        run: python scripts/build-gallery-docs.py --check
+
       - name: Build documentation site
         run: zensical build --clean --strict
 
